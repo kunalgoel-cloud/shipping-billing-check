@@ -836,11 +836,17 @@ with tab2:
                             else:
                                 # Calculate total weight using BOTH case pack logic AND unit weight logic
                                 # A single AWB can have mixed items: B2B case packs AND B2C units
+                                # B2C units are packed into loose cases (4kg or 8kg) based on volumetric weight
+                                
+                                LOOSE_CASE_4KG = 4.0  # 4 kg loose case
+                                LOOSE_CASE_8KG = 8.0  # 8 kg loose case
+                                
                                 total_cases = 0
                                 total_weight_from_cases = 0
-                                total_weight_from_units = 0
+                                total_loose_weight_volumetric = 0  # For determining loose case size
                                 items_list = []
                                 items_not_configured = []
+                                loose_units_list = []
                                 
                                 for _, order_row in order_items.iterrows():
                                     sku_id = str(order_row.get('SKU ID', '')).strip()
@@ -880,19 +886,55 @@ with tab2:
                                             items_list.append(f"{item_name[:30]} ({quantity} units = {num_cases} cases @ {case_weight}kg)")
                                         
                                         elif 'dead_weight' in item_config and 'volumetric_weight' in item_config:
-                                            # B2C Unit Weight Item
+                                            # B2C Unit Weight Item - these will be packed into loose cases
                                             dead_weight = item_config['dead_weight'] * quantity
                                             vol_weight = item_config['volumetric_weight'] * quantity
-                                            unit_weight = max(dead_weight, vol_weight)
                                             
-                                            total_weight_from_units += unit_weight
+                                            # Accumulate volumetric weight for loose case determination
+                                            total_loose_weight_volumetric += vol_weight
                                             
-                                            items_list.append(f"{item_name[:30]} ({quantity} units @ {unit_weight:.2f}kg)")
+                                            loose_units_list.append({
+                                                'name': item_name,
+                                                'quantity': quantity,
+                                                'dead_weight': dead_weight,
+                                                'vol_weight': vol_weight
+                                            })
                                         
                                         else:
                                             items_not_configured.append(f"{sku_id or sku_title} (x{quantity}) [Unknown Type]")
                                     else:
                                         items_not_configured.append(f"{sku_id or sku_title} (x{quantity})")
+                                
+                                # Now pack loose units into appropriate loose cases
+                                loose_case_weight = 0
+                                loose_case_count = 0
+                                
+                                if total_loose_weight_volumetric > 0:
+                                    # Determine which loose case size to use based on volumetric weight
+                                    # If volumetric weight fits in 4kg case, use 4kg, otherwise use 8kg
+                                    import math
+                                    
+                                    if total_loose_weight_volumetric <= LOOSE_CASE_4KG:
+                                        # Fits in single 4kg case
+                                        loose_case_count = 1
+                                        loose_case_weight = LOOSE_CASE_4KG
+                                    elif total_loose_weight_volumetric <= LOOSE_CASE_8KG:
+                                        # Fits in single 8kg case
+                                        loose_case_count = 1
+                                        loose_case_weight = LOOSE_CASE_8KG
+                                    else:
+                                        # Need multiple 8kg cases
+                                        loose_case_count = math.ceil(total_loose_weight_volumetric / LOOSE_CASE_8KG)
+                                        loose_case_weight = loose_case_count * LOOSE_CASE_8KG
+                                    
+                                    # Add loose units to items list
+                                    loose_items_desc = ", ".join([f"{item['name'][:20]} (x{item['quantity']})" for item in loose_units_list])
+                                    items_list.append(f"LOOSE UNITS: {loose_items_desc} → {loose_case_count} × {loose_case_weight/loose_case_count:.0f}kg case")
+                                    
+                                    total_cases += loose_case_count
+                                
+                                # Total billable weight
+                                total_weight_from_units = loose_case_weight
                                 
                                 # Billable weight for B2B is TOTAL of case pack weight + unit weight
                                 billable_weight = total_weight_from_cases + total_weight_from_units
@@ -960,8 +1002,8 @@ with tab2:
                                     'Item Details': ', '.join(items_list) if items_list else 'Not configured',
                                     'Total Units': sum([int(float(order_row.get('Quantity', 0))) for _, order_row in order_items.iterrows()]),
                                     'Total Cases': total_cases,
-                                    'Case Pack Weight (kg)': round(total_weight_from_cases, 2),
-                                    'Unit Weight (kg)': round(total_weight_from_units, 2),
+                                    'Master Carton Weight (kg)': round(total_weight_from_cases, 2),
+                                    'Loose Case Weight (kg)': round(total_weight_from_units, 2),
                                     'Billable Weight (kg)': round(billable_weight, 2),
                                     'Expected Chargeable Weight (kg)': round(expected_chargeable_weight, 2),
                                     'Charged Weight (kg)': charged_weight,
