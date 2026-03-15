@@ -415,6 +415,10 @@ with tab1:
                             charged_weight_raw = bill_row.get('Weight', 0)
                             try:
                                 charged_weight = float(charged_weight_raw)
+                                # Check if weight is in grams (typically > 50 indicates grams not kg)
+                                # If charged weight is abnormally high (> 50), it's likely in grams
+                                if charged_weight > 50:
+                                    charged_weight = charged_weight / 1000  # Convert grams to kg
                             except (ValueError, TypeError):
                                 charged_weight = 0.0
                             
@@ -504,6 +508,14 @@ with tab1:
                                 billable_weight_grams = billable_weight * 1000
                                 charged_weight_grams = charged_weight * 1000
                                 
+                                # Calculate expected chargeable weight (rounded up to nearest 500g slab)
+                                if billable_weight_grams <= 500:
+                                    expected_chargeable_weight_kg = 0.5
+                                else:
+                                    # Round up to nearest 500g
+                                    slabs_needed = int((billable_weight_grams - 1) / 500) + 1
+                                    expected_chargeable_weight_kg = (slabs_needed * 500) / 1000
+                                
                                 # Determine which 500g slab the billable weight falls into
                                 # Slab 1: 0-500g, Slab 2: 501-1000g, Slab 3: 1001-1500g, etc.
                                 if billable_weight_grams <= 500:
@@ -532,48 +544,57 @@ with tab1:
                                 status_flag = 'OK'
                                 
                                 # Check weight discrepancy
-                                # Rule: Charged weight must satisfy:
-                                # 1. billable_weight <= charged_weight <= slab_max_kg
-                                # Charged weight can be ANY value within this range (not just 500g multiples)
+                                # New Rule per user clarification:
+                                # 1. If charged_weight <= expected_chargeable_weight (ideal 500g slab): OK
+                                # 2. If charged_weight > expected_chargeable_weight: ERROR - Weight Overcharged
+                                # 3. Validate shipping fee separately
                                 
-                                if charged_weight > 0:
-                                    # Check if charged weight exceeds the slab maximum
-                                    if charged_weight > slab_max_kg:
+                                if charged_weight > 0 and billable_weight > 0:
+                                    # Check if charged weight exceeds the expected chargeable weight slab
+                                    if charged_weight > expected_chargeable_weight_kg:
                                         weight_status = "Weight Error - Overcharged"
-                                        analysis_parts.append(f"Charged weight ({charged_weight:.3f}kg) exceeds slab limit ({slab_max_kg:.3f}kg) for billable weight ({billable_weight:.3f}kg)")
+                                        analysis_parts.append(f"Charged weight ({charged_weight:.3f}kg) exceeds expected chargeable slab ({expected_chargeable_weight_kg:.3f}kg)")
                                         status_flag = 'Error'
-                                    # Check if charged weight is less than billable weight
-                                    elif charged_weight < billable_weight:
-                                        weight_status = "Weight Error - Undercharged"
-                                        analysis_parts.append(f"Charged weight ({charged_weight:.3f}kg) is less than billable weight ({billable_weight:.3f}kg)")
-                                        status_flag = 'Error'
-                                    # Otherwise it's OK (within acceptable range: billable <= charged <= slab_max)
+                                    # If charged weight is within expected slab, it's OK
+                                    # (even if it's less than billable weight - shipper's choice)
                                 
                                 # Check courier
                                 if not courier:
                                     analysis_parts.append("Courier not specified")
-                                    status_flag = 'Warning'
+                                    if status_flag == 'OK':
+                                        status_flag = 'Warning'
                                     billing_status = "Courier Missing"
                                 
-                                # Check freight amount
+                                # Check freight amount validation
+                                freight_status = "OK"
                                 if expected_freight is not None and charged_amount > 0:
                                     freight_diff = charged_amount - expected_freight
-                                    if freight_diff > 0.5:  # Allow 0.5 rupee tolerance
-                                        billing_status = "Overcharged"
-                                        analysis_parts.append(f"Overcharged by ₹{freight_diff:.2f}")
-                                        status_flag = 'Error'
-                                    elif freight_diff < -0.5:
-                                        billing_status = "Undercharged"
-                                        analysis_parts.append(f"Undercharged by ₹{abs(freight_diff):.2f}")
+                                    if abs(freight_diff) > 0.5:  # Allow 0.5 rupee tolerance
+                                        if freight_diff > 0:
+                                            freight_status = "Freight Overcharged"
+                                            analysis_parts.append(f"Freight overcharged by ₹{freight_diff:.2f}")
+                                            if status_flag == 'OK':
+                                                status_flag = 'Warning'
+                                        else:
+                                            freight_status = "Freight Undercharged"
+                                            analysis_parts.append(f"Freight undercharged by ₹{abs(freight_diff):.2f}")
+                                            if status_flag == 'OK':
+                                                status_flag = 'Warning'
+                                    
+                                    # Update billing status based on freight validation
+                                    if freight_status != "OK":
+                                        billing_status = freight_status
                                 elif expected_freight is None and courier:
                                     analysis_parts.append(f"Cannot calculate freight: {freight_calc_note}")
-                                    billing_status = "Cannot Verify"
-                                    status_flag = 'Warning'
+                                    billing_status = "Cannot Verify Freight"
+                                    if status_flag == 'OK':
+                                        status_flag = 'Warning'
                                 
                                 # Check for unconfigured items
                                 if items_not_configured:
                                     analysis_parts.append(f"Items not configured: {', '.join(items_not_configured)}")
-                                    status_flag = 'Warning'
+                                    if status_flag == 'OK':
+                                        status_flag = 'Warning'
                                 
                                 if not analysis_parts:
                                     analysis_parts.append("All checks passed")
@@ -586,15 +607,15 @@ with tab1:
                                     'Calculated Dead Weight (kg)': round(total_dead_weight, 3),
                                     'Calculated Vol Weight (kg)': round(total_vol_weight, 3),
                                     'Billable Weight (kg)': round(billable_weight, 3),
-                                    'Slab Range (kg)': f"{round(billable_weight, 3)} - {round(slab_max_kg, 3)}",
-                                    'Charged Weight (kg)': charged_weight,
+                                    'Expected Chargeable Weight (kg)': round(expected_chargeable_weight_kg, 3),
+                                    'Charged Weight (kg)': round(charged_weight, 3),
                                     'Weight Status': weight_status,
                                     'Zone': zone,
                                     'Expected Freight (₹)': round(expected_freight, 2) if expected_freight else 'N/A',
                                     'Charged Freight (₹)': round(charged_amount, 2),
-                                    'Freight Difference (₹)': round(charged_amount - expected_freight, 2) if expected_freight else 'N/A',
-                                    'Billing Status': billing_status,
-                                    'Analysis': ' | '.join(analysis_parts) if analysis_parts else 'All checks passed',
+                                    'Freight Difference (₹)': round(freight_diff, 2) if expected_freight and charged_amount > 0 else 'N/A',
+                                    'Freight Status': freight_status,
+                                    'Analysis': ' | '.join(analysis_parts),
                                     'Status': status_flag
                                 })
                         
