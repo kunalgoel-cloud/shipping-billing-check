@@ -485,6 +485,22 @@ with tab1:
                                 # Determine billable weight (higher of dead/vol)
                                 billable_weight = max(total_dead_weight, total_vol_weight)
                                 
+                                # Calculate the expected charged weight (rounded up to nearest 500g slab)
+                                # Convert to grams for slab calculation
+                                billable_weight_grams = billable_weight * 1000
+                                
+                                # Round up to nearest 500g slab
+                                if billable_weight_grams <= 500:
+                                    expected_charged_weight_kg = 0.5
+                                else:
+                                    # Calculate how many 500g slabs needed
+                                    slabs_needed = (billable_weight_grams / 500)
+                                    if slabs_needed != int(slabs_needed):
+                                        slabs_needed = int(slabs_needed) + 1
+                                    else:
+                                        slabs_needed = int(slabs_needed)
+                                    expected_charged_weight_kg = (slabs_needed * 500) / 1000
+                                
                                 # Determine zone
                                 zone = determine_zone(origin_city, dest_city, dest_state)
                                 
@@ -502,10 +518,16 @@ with tab1:
                                 status_flag = 'OK'
                                 
                                 # Check weight discrepancy
-                                if billable_weight > charged_weight and charged_weight > 0:
-                                    weight_status = "Weight Error"
-                                    analysis_parts.append(f"Calculated weight ({billable_weight:.2f}kg) > Charged weight ({charged_weight:.2f}kg)")
-                                    status_flag = 'Error'
+                                # The charged weight should not exceed the expected charged weight (rounded to 500g slab)
+                                if charged_weight > 0:
+                                    if charged_weight > expected_charged_weight_kg:
+                                        weight_status = "Weight Error - Overcharged"
+                                        analysis_parts.append(f"Charged weight ({charged_weight:.3f}kg) exceeds expected slab ({expected_charged_weight_kg:.3f}kg) for calculated weight ({billable_weight:.3f}kg)")
+                                        status_flag = 'Error'
+                                    elif billable_weight > charged_weight:
+                                        weight_status = "Weight Error - Undercharged"
+                                        analysis_parts.append(f"Calculated weight ({billable_weight:.3f}kg) > Charged weight ({charged_weight:.3f}kg)")
+                                        status_flag = 'Error'
                                 
                                 # Check courier
                                 if not courier:
@@ -544,6 +566,7 @@ with tab1:
                                     'Calculated Dead Weight (kg)': round(total_dead_weight, 3),
                                     'Calculated Vol Weight (kg)': round(total_vol_weight, 3),
                                     'Billable Weight (kg)': round(billable_weight, 3),
+                                    'Expected Charged Weight (kg)': round(expected_charged_weight_kg, 3),
                                     'Charged Weight (kg)': charged_weight,
                                     'Weight Status': weight_status,
                                     'Zone': zone,
@@ -723,6 +746,7 @@ with tab3:
     1. Comparing charged weights against calculated weights from item configurations
     2. Validating freight charges against the Prozo rate card
     3. Identifying missing couriers and unconfigured items
+    4. **Validating weight slabs (500g increments as per billing rules)**
     
     ### Step 1: Configure Item Weights
     
@@ -747,10 +771,33 @@ with tab3:
     
     The system will:
     - ✅ Calculate total weight per AWB (max of dead/volumetric)
+    - ✅ Determine expected charged weight (rounded up to nearest 500g slab)
+    - ✅ Validate charged weight against expected slab
     - ✅ Determine shipping zone (Local, Within State, Metro to Metro, Rest of India, Special Zone)
     - ✅ Calculate expected freight from rate card
     - ✅ Compare charged vs expected amounts
     - ✅ Flag discrepancies
+    
+    ### 🎯 Weight Slab Validation Logic
+    
+    **As per billing rules, charges change every 500 grams:**
+    
+    - **Billable Weight 0-500g** → Expected Charged Weight: **0.5 kg**
+    - **Billable Weight 501-1000g** → Expected Charged Weight: **1.0 kg**
+    - **Billable Weight 1001-1500g** → Expected Charged Weight: **1.5 kg**
+    - And so on...
+    
+    **Example:**
+    - Calculated Billable Weight: **300g (0.3 kg)**
+    - Expected Charged Weight: **500g (0.5 kg)** ✅
+    - If Charged Weight: **660g (0.66 kg)** ❌ **ERROR** - Exceeds slab!
+    
+    **Another Example:**
+    - Calculated Billable Weight: **1.2 kg**
+    - Expected Charged Weight: **1.5 kg** (rounded to next 500g slab) ✅
+    - If Charged Weight: **1.8 kg** ❌ **ERROR** - Exceeds slab!
+    - If Charged Weight: **1.5 kg** ✅ **OK**
+    - If Charged Weight: **1.0 kg** ❌ **ERROR** - Below calculated weight!
     
     ### Step 4: Review Results
     
@@ -761,7 +808,10 @@ with tab3:
     - 🟣 **Missing**: AWB not found in order file
     
     **Key Columns:**
-    - **Weight Status**: Compares calculated vs charged weight
+    - **Billable Weight**: Max(Dead Weight, Volumetric Weight)
+    - **Expected Charged Weight**: Billable weight rounded UP to nearest 500g slab
+    - **Charged Weight**: Actual weight charged by shipper
+    - **Weight Status**: Compares charged vs expected slab
     - **Billing Status**: Indicates overcharging, undercharging, or missing courier
     - **Expected Freight**: Calculated from rate card
     - **Freight Difference**: Charged - Expected (positive = overcharged)
@@ -781,6 +831,15 @@ with tab3:
     - **Special Zone**: J&K, HP, Kerala, NE states, Andaman, Lakshadweep
     
     ### 🔧 Common Issues
+    
+    **"Weight Error - Overcharged"**
+    - Charged weight exceeds the expected 500g slab
+    - Example: Billable 300g, Expected 500g, Charged 660g
+    - Shipper is charging for a higher slab than necessary
+    
+    **"Weight Error - Undercharged"**
+    - Calculated billable weight exceeds charged weight
+    - Indicates shipper used lower weight than actual
     
     **"Courier not specified"**
     - AWB has no courier in billing file
@@ -802,8 +861,9 @@ with tab3:
     1. **Configure all SKUs** before running validation
     2. **Export settings regularly** to avoid data loss
     3. **Review warnings** - they indicate missing data
-    4. **Check overcharges** - focus on freight difference column
-    5. **Validate zone assignment** - ensure origin/destination logic is correct
+    4. **Check weight errors** - focus on "Weight Error - Overcharged" entries
+    5. **Check overcharges** - focus on freight difference column
+    6. **Validate zone assignment** - ensure origin/destination logic is correct
     """)
 
 # Footer
