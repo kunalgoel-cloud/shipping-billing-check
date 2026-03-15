@@ -264,6 +264,20 @@ st.markdown('<p class="subtitle">Automated billing verification with rate card v
 # Sidebar - Settings
 with st.sidebar:
     st.markdown("### ⚙️ Item Weight Configuration")
+    
+    # Info box about persistent storage
+    with st.expander("ℹ️ About Persistent Storage"):
+        st.markdown("""
+        **Your item configurations are saved permanently!**
+        
+        - All items are auto-saved to `item_weights_persistent.json`
+        - Data persists across app restarts
+        - No need to reconfigure items each time
+        - Export/Import for backup or sharing
+        
+        **File Location:** Same directory as the app
+        """)
+    
     st.markdown("---")
     
     # Add new item
@@ -340,12 +354,12 @@ with st.sidebar:
             st.error(f"Error importing settings: {str(e)}")
 
 # Main content
-tab1, tab2, tab3 = st.tabs(["📋 Validation", "📊 Results", "ℹ️ Instructions"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["📋 B2C Validation", "🏢 B2B Validation", "📊 Results", "📄 Rate Card", "ℹ️ Instructions"])
 
 with tab1:
-    st.markdown("### File Upload")
+    st.markdown("### B2C Billing Validation")
     
-    st.info("📄 **Upload the 3 required files:** Billing Excel (Freight sheet), Order CSV, and Rate Card PDF (already configured)")
+    st.info("📄 **Upload the required files:** Billing Excel (Freight sheet) and Order CSV")
     
     col1, col2 = st.columns(2)
     
@@ -354,7 +368,7 @@ with tab1:
         billing_file = st.file_uploader(
             "Upload Mama Nourish billing file",
             type=['xlsx', 'xls'],
-            key="billing_file",
+            key="b2c_billing_file",
             help="Upload the Excel file with 'Freight' sheet"
         )
     
@@ -363,12 +377,12 @@ with tab1:
         order_file = st.file_uploader(
             "Upload order details CSV",
             type=['csv'],
-            key="order_file",
+            key="b2c_order_file",
             help="Upload the CSV containing SKU, AWB, and quantity"
         )
     
     # Validation button
-    if st.button("🔍 Validate Billing", use_container_width=True, type="primary"):
+    if st.button("🔍 Validate B2C Billing", use_container_width=True, type="primary", key="validate_b2c"):
         if not billing_file or not order_file:
             st.error("⚠️ Please upload both billing and order files")
         else:
@@ -604,6 +618,29 @@ with tab1:
                         st.code(traceback.format_exc())
 
 with tab2:
+    st.markdown("### B2B Billing Validation")
+    st.info("🚧 **B2B validation will be implemented after B2C logic is finalized**")
+    
+    st.markdown("""
+    #### Planned B2B Features:
+    - Different weight slab rules (if applicable)
+    - Different rate card structure
+    - Separate billing file format support
+    - B2B-specific validations
+    
+    **Note:** This section will be activated once B2C validation is fully tested and approved.
+    """)
+    
+    # Placeholder for B2B uploads
+    col1, col2 = st.columns(2)
+    with col1:
+        st.file_uploader("B2B Billing File (Coming Soon)", type=['xlsx', 'xls'], key="b2b_billing", disabled=True)
+    with col2:
+        st.file_uploader("B2B Order File (Coming Soon)", type=['csv'], key="b2b_order", disabled=True)
+    
+    st.button("🔍 Validate B2B Billing (Coming Soon)", use_container_width=True, disabled=True, key="validate_b2b")
+
+with tab3:
     if st.session_state.validation_results is not None:
         results_df = st.session_state.validation_results
         
@@ -745,45 +782,195 @@ with tab2:
     else:
         st.info("👆 Upload files and run validation to see results here")
 
-with tab3:
+with tab4:
+    st.markdown("### 📄 Rate Card Management")
+    
+    st.info("**Current Status:** Rate card is hardcoded from the Prozo commercials PDF in the system")
+    
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        st.markdown("#### Upload New Rate Card (PDF)")
+        st.markdown("""
+        Upload your commercials PDF to update the rate card. The system currently supports:
+        - Bluedart Surface & Air
+        - Delhivery Surface & Air
+        - Xpressbees, DTDC, Ecom Express, Professional (can be added)
+        """)
+        
+        rate_card_pdf = st.file_uploader(
+            "Upload Rate Card PDF",
+            type=['pdf'],
+            key="rate_card_pdf",
+            help="Upload the commercials PDF file"
+        )
+        
+        if rate_card_pdf:
+            st.success(f"✅ Uploaded: {rate_card_pdf.name}")
+            st.warning("⚠️ **Note:** PDF parsing is not yet implemented. Currently using hardcoded rates from the Prozo commercials PDF.")
+            st.info("💡 **Future Enhancement:** The system will automatically extract rates from uploaded PDFs.")
+    
+    with col2:
+        st.markdown("#### Current Rate Card")
+        st.markdown("**Configured Couriers:**")
+        for courier in RATE_CARD.keys():
+            st.write(f"✓ {courier}")
+    
+    st.markdown("---")
+    
+    # Display current rate card
+    st.markdown("### 📊 Current Rate Card Details")
+    
+    courier_select = st.selectbox("Select Courier to View Rates", list(RATE_CARD.keys()))
+    
+    if courier_select:
+        st.markdown(f"#### {courier_select} - Zone-wise Rates")
+        
+        # Convert rate card to dataframe for display
+        zones = list(RATE_CARD[courier_select].keys())
+        
+        for zone in zones:
+            with st.expander(f"🌍 {zone}"):
+                rates = RATE_CARD[courier_select][zone]
+                
+                # Display rates nicely
+                if 'Air' in courier_select:
+                    st.markdown(f"""
+                    - **0-500g:** ₹{rates['0-500']}
+                    - **Additional 500g:** ₹{rates['add_500']}
+                    """)
+                else:
+                    st.markdown(f"""
+                    - **0-500g:** ₹{rates['0-500']}
+                    - **Additional 500g (up to 2kg):** ₹{rates['add_500']}
+                    - **2kg base:** ₹{rates['2kg']}
+                    - **Additional 1kg (2-5kg):** ₹{rates['add_1kg_2-5']}
+                    - **5kg base:** ₹{rates['5kg']}
+                    - **Additional 1kg (5-10kg):** ₹{rates['add_1kg_5-10']}
+                    - **10kg base:** ₹{rates['10kg']}
+                    - **Additional 1kg (10kg+):** ₹{rates['add_1kg_10+']}
+                    """)
+    
+    st.markdown("---")
+    
+    # Export rate card
+    st.markdown("### 📥 Export Rate Card")
+    rate_card_json = json.dumps(RATE_CARD, indent=2)
+    st.download_button(
+        label="💾 Download Rate Card as JSON",
+        data=rate_card_json,
+        file_name="rate_card_export.json",
+        mime="application/json",
+        use_container_width=True
+    )
+
+with tab5:
     st.markdown("""
     ### 📖 How to Use This Application
     
-    This application validates billing for **Mama Nourish** shipments by:
-    1. Comparing charged weights against calculated weights from item configurations
-    2. Validating freight charges against the Prozo rate card
-    3. Identifying missing couriers and unconfigured items
-    4. **Validating weight slabs (500g increments as per billing rules)**
+    This application validates billing for **Mama Nourish** shipments with:
+    1. **B2C Validation** - Weight slab and rate card validation (Active)
+    2. **B2B Validation** - Separate validation rules (Coming Soon)
+    3. **Rate Card Management** - View and upload commercials
+    4. **Persistent Storage** - Item configurations saved permanently
     
-    ### Step 1: Configure Item Weights
+    ---
+    
+    ## 🗂️ Application Tabs
+    
+    ### Tab 1: B2C Validation
+    - Upload billing Excel (Freight sheet) and order CSV
+    - Validates weight slabs (500g increments)
+    - Compares against rate card
+    - Flags overcharges and errors
+    
+    ### Tab 2: B2B Validation (Coming Soon)
+    - Will support B2B-specific rules
+    - Different rate structures
+    - Separate validation logic
+    - **Status:** Placeholder - will be activated after B2C is finalized
+    
+    ### Tab 3: Results
+    - View validation summary with metrics
+    - Filter by status (Errors, Warnings, OK, Missing)
+    - Financial summary (overcharges, undercharges)
+    - Export to Excel or CSV
+    
+    ### Tab 4: Rate Card
+    - View current rate card details
+    - Upload new commercials PDF (placeholder for future)
+    - Export rate card as JSON
+    - Currently using hardcoded Prozo rates
+    
+    ### Tab 5: Instructions
+    - Complete user guide
+    - Weight slab logic explanation
+    - Troubleshooting tips
+    
+    ---
+    
+    ## 💾 Permanent Item Storage
+    
+    **Your item configurations are saved automatically and permanently!**
+    
+    ### How It Works:
+    1. **Auto-Save:** Every time you add an item, it's saved to `item_weights_persistent.json`
+    2. **Auto-Load:** When you open the app, all items load automatically
+    3. **No Data Loss:** Items persist across sessions, restarts, and deployments
+    4. **File Location:** Same directory as the application
+    
+    ### To Backup Your Items:
+    1. Click "📥 Export Settings" in the sidebar
+    2. Save the JSON file to your computer
+    3. Store it safely for backup
+    
+    ### To Restore Items:
+    1. Click "📤 Import Settings" in the sidebar
+    2. Upload your saved JSON file
+    3. All items will be added/updated
+    
+    ### To Share Items with Team:
+    1. Export settings to JSON
+    2. Share the file with team members
+    3. They import it into their app instance
+    
+    ---
+    
+    ### Step 1: Configure Item Weights (One-Time Setup)
     
     Add each SKU with its weight information:
     - Use **SKU ID** or **SKU Title** from your order file
-    - Enter **Dead Weight** (actual physical weight)
-    - Enter **Volumetric Weight** (L × B × H / 5000 in cm)
-    - Click "Add Item" to save persistently
+    - Enter **Dead Weight** (actual physical weight in kg)
+    - Enter **Volumetric Weight** (L × B × H / 5000 in cm, result in kg)
+    - Click "Add Item" - **IT SAVES PERMANENTLY!**
     
-    💡 **Tip:** Export your configuration after setup!
+    💡 **Tips:**
+    - Items persist forever - configure once, use always
+    - Export settings regularly for backup
+    - Use search to find items quickly
+    - Delete items anytime if needed
     
-    ### Step 2: Upload Required Files
+    ### Step 2: Upload Required Files (B2C Tab)
     
     **1. Billing File (Excel):** 
     - Must have "Freight" sheet
-    - Contains AWB NUMBER, Weight, Courier Parent, freight charges
+    - Contains: AWB NUMBER, Weight, Courier Parent, Base Freight Cost
+    - Example: Mama_Nourish__31_.xlsx
     
     **2. Order File (CSV):**
-    - Contains SKU ID, SKU Title, Awb No, Quantity, Courier, State, city
+    - Contains: SKU ID, SKU Title, Awb No, Quantity, Courier, State, city
+    - Example: Order export CSV
     
     ### Step 3: Run Validation
     
-    The system will:
-    - ✅ Calculate total weight per AWB (max of dead/volumetric)
-    - ✅ Determine expected charged weight (rounded up to nearest 500g slab)
-    - ✅ Validate charged weight against expected slab
-    - ✅ Determine shipping zone (Local, Within State, Metro to Metro, Rest of India, Special Zone)
+    Click "🔍 Validate B2C Billing" - The system will:
+    - ✅ Sum all items per AWB (multi-item orders handled)
+    - ✅ Calculate billable weight (max of dead/volumetric)
+    - ✅ Determine weight slab (500g increments)
+    - ✅ Validate charged weight within slab
+    - ✅ Detect shipping zone automatically
     - ✅ Calculate expected freight from rate card
-    - ✅ Compare charged vs expected amounts
-    - ✅ Flag discrepancies
+    - ✅ Compare and flag discrepancies
     
     ### 🎯 Weight Slab Validation Logic
     
