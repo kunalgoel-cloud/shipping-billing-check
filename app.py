@@ -509,13 +509,11 @@ with tab1:
                                 if billable_weight_grams <= 500:
                                     slab_min_kg = 0.0
                                     slab_max_kg = 0.5
-                                    expected_charged_weight_kg = 0.5
                                 else:
                                     # Calculate which slab the billable weight is in
                                     slab_number = int((billable_weight_grams - 1) / 500) + 1
                                     slab_min_kg = ((slab_number - 1) * 500) / 1000
                                     slab_max_kg = (slab_number * 500) / 1000
-                                    expected_charged_weight_kg = slab_max_kg
                                 
                                 # Determine zone
                                 zone = determine_zone(origin_city, dest_city, dest_state)
@@ -534,9 +532,10 @@ with tab1:
                                 status_flag = 'OK'
                                 
                                 # Check weight discrepancy
-                                # Weight is OK if:
-                                # 1. Charged weight is within the same 500g slab as billable weight (slab_min < charged <= slab_max)
-                                # 2. Charged weight is at least equal to billable weight
+                                # Rule: Charged weight must satisfy:
+                                # 1. billable_weight <= charged_weight <= slab_max_kg
+                                # Charged weight can be ANY value within this range (not just 500g multiples)
+                                
                                 if charged_weight > 0:
                                     # Check if charged weight exceeds the slab maximum
                                     if charged_weight > slab_max_kg:
@@ -548,7 +547,7 @@ with tab1:
                                         weight_status = "Weight Error - Undercharged"
                                         analysis_parts.append(f"Charged weight ({charged_weight:.3f}kg) is less than billable weight ({billable_weight:.3f}kg)")
                                         status_flag = 'Error'
-                                    # Otherwise it's OK (within same slab and >= billable weight)
+                                    # Otherwise it's OK (within acceptable range: billable <= charged <= slab_max)
                                 
                                 # Check courier
                                 if not courier:
@@ -587,7 +586,7 @@ with tab1:
                                     'Calculated Dead Weight (kg)': round(total_dead_weight, 3),
                                     'Calculated Vol Weight (kg)': round(total_vol_weight, 3),
                                     'Billable Weight (kg)': round(billable_weight, 3),
-                                    'Weight Slab Range (kg)': f"{slab_min_kg:.1f} - {slab_max_kg:.1f}",
+                                    'Slab Range (kg)': f"{round(billable_weight, 3)} - {round(slab_max_kg, 3)}",
                                     'Charged Weight (kg)': charged_weight,
                                     'Weight Status': weight_status,
                                     'Zone': zone,
@@ -595,7 +594,7 @@ with tab1:
                                     'Charged Freight (₹)': round(charged_amount, 2),
                                     'Freight Difference (₹)': round(charged_amount - expected_freight, 2) if expected_freight else 'N/A',
                                     'Billing Status': billing_status,
-                                    'Analysis': ' | '.join(analysis_parts),
+                                    'Analysis': ' | '.join(analysis_parts) if analysis_parts else 'All checks passed',
                                     'Status': status_flag
                                 })
                         
@@ -974,37 +973,82 @@ with tab5:
     
     ### 🎯 Weight Slab Validation Logic
     
-    **As per billing rules, charges change every 500 grams:**
+    **Rule: Charged weight can be ANY value between billable weight and slab limit**
     
-    - **Slab 1: 0-500g** → Any charged weight up to 500g is acceptable
-    - **Slab 2: 501-1000g** → Any charged weight from 501g to 1000g is acceptable
-    - **Slab 3: 1001-1500g** → Any charged weight from 1001g to 1500g is acceptable
+    ## 📏 Weight Slab Structure
+    
+    Billing slabs are in **500g increments**:
+    - **Slab 1:** 0-500g (0.0-0.5 kg)
+    - **Slab 2:** 501-1000g (0.501-1.0 kg)
+    - **Slab 3:** 1001-1500g (1.001-1.5 kg)
+    - **Slab 4:** 1501-2000g (1.501-2.0 kg)
     - And so on...
     
-    **The charged weight is correct if:**
-    1. It falls within the same 500g slab as the billable weight
-    2. It is greater than or equal to the billable weight
+    ## ✅ Validation Rule (Applies to ALL couriers)
     
-    **Example 1:**
-    - Billable Weight: **200g (0.2 kg)** → Falls in Slab 1 (0-500g)
-    - Charged Weight: **400g (0.4 kg)** → ✅ **OK** (within same slab, >= billable)
-    - Charged Weight: **500g (0.5 kg)** → ✅ **OK** (within same slab, >= billable)
-    - Charged Weight: **600g (0.6 kg)** → ❌ **ERROR** (exceeds slab limit!)
+    **Charged weight is CORRECT if:**
+    ```
+    billable_weight ≤ charged_weight ≤ slab_maximum
+    ```
     
-    **Example 2:**
-    - Billable Weight: **560g (0.56 kg)** → Falls in Slab 2 (501-1000g)
-    - Charged Weight: **660g (0.66 kg)** → ✅ **OK** (within same slab, >= billable)
-    - Charged Weight: **800g (0.8 kg)** → ✅ **OK** (within same slab, >= billable)
-    - Charged Weight: **1000g (1.0 kg)** → ✅ **OK** (at slab limit, >= billable)
-    - Charged Weight: **1100g (1.1 kg)** → ❌ **ERROR** (exceeds slab limit!)
-    - Charged Weight: **500g (0.5 kg)** → ❌ **ERROR** (less than billable weight!)
+    **Charged weight does NOT need to be exact 500g multiples!**
+    - Any value within the slab range is acceptable
+    - Flexibility within the slab is allowed
     
-    **Example 3:**
-    - Billable Weight: **1.2 kg** → Falls in Slab 3 (1001-1500g / 1.001-1.5 kg)
-    - Charged Weight: **1.3 kg** → ✅ **OK** (within same slab)
-    - Charged Weight: **1.5 kg** → ✅ **OK** (at slab limit)
-    - Charged Weight: **1.6 kg** → ❌ **ERROR** (exceeds slab limit!)
-    - Charged Weight: **1.0 kg** → ❌ **ERROR** (less than billable weight!)
+    ## 📊 Examples
+    
+    ### Example 1: Billable 200g (0.2 kg)
+    - **Falls in Slab 1:** 0-500g (0.0-0.5 kg)
+    - **Acceptable Range:** 200g to 500g (0.2 kg to 0.5 kg)
+    
+    | Charged Weight | Status | Reason |
+    |---------------|--------|--------|
+    | 150g (0.15 kg) | ❌ Error | Below billable weight |
+    | 200g (0.2 kg) | ✅ OK | At billable weight |
+    | 300g (0.3 kg) | ✅ OK | Within slab range |
+    | 440g (0.44 kg) | ✅ OK | Within slab range |
+    | 500g (0.5 kg) | ✅ OK | At slab maximum |
+    | 550g (0.55 kg) | ❌ Error | Exceeds slab limit |
+    
+    ### Example 2: Billable 600g (0.6 kg)
+    - **Falls in Slab 2:** 501-1000g (0.501-1.0 kg)
+    - **Acceptable Range:** 600g to 1000g (0.6 kg to 1.0 kg)
+    
+    | Charged Weight | Status | Reason |
+    |---------------|--------|--------|
+    | 500g (0.5 kg) | ❌ Error | Below billable weight |
+    | 600g (0.6 kg) | ✅ OK | At billable weight |
+    | 750g (0.75 kg) | ✅ OK | Within slab range |
+    | 880g (0.88 kg) | ✅ OK | Within slab range |
+    | 1000g (1.0 kg) | ✅ OK | At slab maximum |
+    | 1100g (1.1 kg) | ❌ Error | Exceeds slab limit |
+    
+    ### Example 3: Billable 1.2 kg
+    - **Falls in Slab 3:** 1001-1500g (1.001-1.5 kg)
+    - **Acceptable Range:** 1.2 kg to 1.5 kg
+    
+    | Charged Weight | Status | Reason |
+    |---------------|--------|--------|
+    | 1.0 kg | ❌ Error | Below billable weight |
+    | 1.2 kg | ✅ OK | At billable weight |
+    | 1.35 kg | ✅ OK | Within slab range |
+    | 1.5 kg | ✅ OK | At slab maximum |
+    | 1.6 kg | ❌ Error | Exceeds slab limit |
+    
+    ## 🎯 Key Points
+    
+    ✅ Charged weight can be **any decimal value** (not just 500g multiples)
+    ✅ Must be **≥ billable weight** (shipper can't charge less than actual)
+    ✅ Must be **≤ slab maximum** (can't jump to next slab)
+    ✅ Same rule applies to **both Air and Surface** couriers
+    
+    ## ❌ Common Errors
+    
+    | Error Type | Example | Why It's Wrong |
+    |------------|---------|----------------|
+    | **Undercharged** | Billable 600g, Charged 500g | Charged < Billable |
+    | **Overcharged** | Billable 600g, Charged 1100g | Exceeds slab limit (1000g) |
+    | **Way Overcharged** | Billable 200g, Charged 1500g | Multiple slabs exceeded |
     
     ### Step 4: Review Results
     
@@ -1015,13 +1059,16 @@ with tab5:
     - 🟣 **Missing**: AWB not found in order file
     
     **Key Columns:**
-    - **Billable Weight**: Max(Dead Weight, Volumetric Weight) - Total calculated weight
-    - **Weight Slab Range**: The 500g slab range the billable weight falls into (e.g., "0.5 - 1.0")
-    - **Charged Weight**: Actual weight charged by shipper
-    - **Weight Status**: Validates if charged weight is within acceptable slab range
-    - **Billing Status**: Indicates overcharging, undercharging, or missing courier
-    - **Expected Freight**: Calculated from rate card
-    - **Freight Difference**: Charged - Expected (positive = overcharged)
+    - **Billable Weight (kg)**: Max(Dead Weight, Volumetric Weight) - Total calculated weight
+    - **Slab Range (kg)**: Acceptable charged weight range (billable to slab max)
+    - **Charged Weight (kg)**: Actual weight charged by shipper
+    - **Weight Status**: 
+      - ✅ OK: billable ≤ charged ≤ slab_max
+      - ❌ Error - Overcharged: charged > slab_max
+      - ❌ Error - Undercharged: charged < billable
+    - **Billing Status**: Indicates freight overcharging, undercharging, or missing courier
+    - **Expected Freight (₹)**: Calculated from rate card based on billable weight
+    - **Freight Difference (₹)**: Charged - Expected (positive = overcharged)
     
     ### 📊 Rate Card Information
     
