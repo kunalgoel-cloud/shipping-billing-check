@@ -834,9 +834,11 @@ with tab2:
                                     'Status': 'Missing'
                                 })
                             else:
-                                # Calculate total weight using case pack logic for B2B
+                                # Calculate total weight using BOTH case pack logic AND unit weight logic
+                                # A single AWB can have mixed items: B2B case packs AND B2C units
                                 total_cases = 0
                                 total_weight_from_cases = 0
+                                total_weight_from_units = 0
                                 items_list = []
                                 items_not_configured = []
                                 
@@ -849,7 +851,7 @@ with tab2:
                                     except:
                                         quantity = 1
                                     
-                                    # Try to find case pack config
+                                    # Try to find item config
                                     item_config = None
                                     item_name = None
                                     
@@ -863,11 +865,11 @@ with tab2:
                                     if item_config:
                                         # Check if this is a B2B case pack item
                                         if 'case_pack_qty' in item_config and 'case_weight' in item_config:
+                                            # B2B Case Pack Item
                                             case_pack_qty = item_config['case_pack_qty']
                                             case_weight = item_config['case_weight']
                                             
-                                            # Calculate number of cases
-                                            # Round up to nearest case if partial case exists
+                                            # Calculate number of cases (round up for partial cases)
                                             import math
                                             num_cases = math.ceil(quantity / case_pack_qty)
                                             case_weight_total = num_cases * case_weight
@@ -875,15 +877,25 @@ with tab2:
                                             total_cases += num_cases
                                             total_weight_from_cases += case_weight_total
                                             
-                                            items_list.append(f"{item_name[:30]} ({quantity} units = {num_cases} cases)")
+                                            items_list.append(f"{item_name[:30]} ({quantity} units = {num_cases} cases @ {case_weight}kg)")
+                                        
+                                        elif 'dead_weight' in item_config and 'volumetric_weight' in item_config:
+                                            # B2C Unit Weight Item
+                                            dead_weight = item_config['dead_weight'] * quantity
+                                            vol_weight = item_config['volumetric_weight'] * quantity
+                                            unit_weight = max(dead_weight, vol_weight)
+                                            
+                                            total_weight_from_units += unit_weight
+                                            
+                                            items_list.append(f"{item_name[:30]} ({quantity} units @ {unit_weight:.2f}kg)")
+                                        
                                         else:
-                                            # This is a B2C unit item, skip for B2B
-                                            items_not_configured.append(f"{sku_id or sku_title} (x{quantity}) [B2C Item]")
+                                            items_not_configured.append(f"{sku_id or sku_title} (x{quantity}) [Unknown Type]")
                                     else:
                                         items_not_configured.append(f"{sku_id or sku_title} (x{quantity})")
                                 
-                                # Billable weight for B2B is total weight from cases
-                                billable_weight = total_weight_from_cases
+                                # Billable weight for B2B is TOTAL of case pack weight + unit weight
+                                billable_weight = total_weight_from_cases + total_weight_from_units
                                 
                                 # Expected chargeable weight (minimum 15 kg for B2B)
                                 expected_chargeable_weight = max(billable_weight, MIN_CHARGEABLE_WEIGHT)
@@ -946,8 +958,10 @@ with tab2:
                                     'Courier': courier,
                                     'Zone': applied_zone,
                                     'Item Details': ', '.join(items_list) if items_list else 'Not configured',
-                                    'Total Units': sum([order_row.get('Quantity', 0) for _, order_row in order_items.iterrows()]),
+                                    'Total Units': sum([int(float(order_row.get('Quantity', 0))) for _, order_row in order_items.iterrows()]),
                                     'Total Cases': total_cases,
+                                    'Case Pack Weight (kg)': round(total_weight_from_cases, 2),
+                                    'Unit Weight (kg)': round(total_weight_from_units, 2),
                                     'Billable Weight (kg)': round(billable_weight, 2),
                                     'Expected Chargeable Weight (kg)': round(expected_chargeable_weight, 2),
                                     'Charged Weight (kg)': charged_weight,
