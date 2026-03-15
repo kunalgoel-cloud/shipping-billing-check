@@ -256,6 +256,8 @@ if 'item_weights' not in st.session_state:
     st.session_state.item_weights = load_item_weights()
 if 'validation_results' not in st.session_state:
     st.session_state.validation_results = None
+if 'validation_type' not in st.session_state:
+    st.session_state.validation_type = None  # 'B2C' or 'B2B'
 
 # Header
 st.markdown('<h1 class="main-title">📦 Shipment Billing Validator - Mama Nourish</h1>', unsafe_allow_html=True)
@@ -626,6 +628,7 @@ with tab1:
                     # Store results
                     if results:
                         st.session_state.validation_results = pd.DataFrame(results)
+                        st.session_state.validation_type = 'B2C'
                         st.success(f"✅ Validation completed! Processed {len(results)} AWBs")
                         st.rerun()
                     else:
@@ -638,34 +641,260 @@ with tab1:
                         st.code(traceback.format_exc())
 
 with tab2:
-    st.markdown("### B2B Billing Validation")
-    st.info("🚧 **B2B validation will be implemented after B2C logic is finalized**")
+    st.markdown("### B2B Billing Validation (Safexpress)")
     
-    st.markdown("""
-    #### Planned B2B Features:
-    - Different weight slab rules (if applicable)
-    - Different rate card structure
-    - Separate billing file format support
-    - B2B-specific validations
+    st.info("📄 **Upload B2B files:** Billing Excel (Invoice sheet) and Order CSV")
     
-    **Note:** This section will be activated once B2C validation is fully tested and approved.
-    """)
-    
-    # Placeholder for B2B uploads
     col1, col2 = st.columns(2)
-    with col1:
-        st.file_uploader("B2B Billing File (Coming Soon)", type=['xlsx', 'xls'], key="b2b_billing", disabled=True)
-    with col2:
-        st.file_uploader("B2B Order File (Coming Soon)", type=['csv'], key="b2b_order", disabled=True)
     
-    st.button("🔍 Validate B2B Billing (Coming Soon)", use_container_width=True, disabled=True, key="validate_b2b")
+    with col1:
+        st.markdown("#### 📄 B2B Billing File (Excel)")
+        b2b_billing_file = st.file_uploader(
+            "Upload B2B Invoice Excel",
+            type=['xlsx', 'xls'],
+            key="b2b_billing_file",
+            help="Upload the Excel file with 'Invoice' sheet"
+        )
+    
+    with col2:
+        st.markdown("#### 📦 B2B Order File (CSV)")
+        b2b_order_file = st.file_uploader(
+            "Upload B2B order details CSV",
+            type=['csv'],
+            key="b2b_order_file",
+            help="Upload the CSV containing SKU, AWB, and quantity"
+        )
+    
+    # Safexpress rate card (from PDF)
+    SAFEXPRESS_RATES = {
+        'N1': {'N1': 6.48, 'N2': 6.48, 'E': 10.8, 'NE': 16.2, 'W1': 7.56, 'W2': 8.64, 'S1': 8.64, 'S2': 10.8, 'C': 7.56},
+        'N2': {'N1': 6.48, 'N2': 6.48, 'E': 10.8, 'NE': 16.2, 'W1': 8.64, 'W2': 8.64, 'S1': 10.8, 'S2': 10.8, 'C': 7.56},
+        'E': {'N1': 8.64, 'N2': 10.8, 'E': 6.48, 'NE': 7.56, 'W1': 8.64, 'W2': 10.8, 'S1': 8.64, 'S2': 10.8, 'C': 7.56},
+        'NE': {'N1': 8.64, 'N2': 10.8, 'E': 7.56, 'NE': 6.48, 'W1': 10.8, 'W2': 10.8, 'S1': 10.8, 'S2': 16.2, 'C': 8.64},
+        'W1': {'N1': 7.56, 'N2': 8.64, 'E': 10.8, 'NE': 16.2, 'W1': 6.48, 'W2': 6.48, 'S1': 8.64, 'S2': 10.8, 'C': 7.56},
+        'W2': {'N1': 8.64, 'N2': 10.8, 'E': 10.8, 'NE': 16.2, 'W1': 6.48, 'W2': 6.48, 'S1': 7.56, 'S2': 10.8, 'C': 7.56},
+        'S1': {'N1': 8.64, 'N2': 10.8, 'E': 10.8, 'NE': 16.2, 'W1': 8.64, 'W2': 7.56, 'S1': 6.48, 'S2': 7.56, 'C': 7.56},
+        'S2': {'N1': 10.8, 'N2': 10.8, 'E': 10.8, 'NE': 16.2, 'W1': 8.64, 'W2': 8.64, 'S1': 6.48, 'S2': 6.48, 'C': 7.56},
+        'C': {'N1': 7.56, 'N2': 8.64, 'E': 10.8, 'NE': 16.2, 'W1': 6.48, 'W2': 7.56, 'S1': 7.56, 'S2': 10.8, 'C': 6.48}
+    }
+    
+    METRO_CITIES = ['AHMEDABAD', 'BENGALURU', 'CHENNAI', 'DELHI', 'HYDERABAD', 'KOLKATA', 'MUMBAI', 'PUNE']
+    MIN_CHARGEABLE_WEIGHT = 15  # kg
+    MIN_FREIGHT = 400  # Rs
+    FSC_PERCENT = 20  # 20%
+    DOCKET_CHARGE = 100  # Rs
+    FOV_CHARGE = 100  # Rs (or 0.1% of invoice value, whichever is higher)
+    METRO_CHARGE = 100  # Rs
+    
+    # B2B Validation button
+    if st.button("🔍 Validate B2B Billing", use_container_width=True, type="primary", key="validate_b2b"):
+        if not b2b_billing_file or not b2b_order_file:
+            st.error("⚠️ Please upload both B2B billing and order files")
+        else:
+            with st.spinner("Analyzing B2B billing data..."):
+                try:
+                    # Read B2B billing file
+                    b2b_billing_df = pd.read_excel(b2b_billing_file, sheet_name='Invoice')
+                    
+                    # The first row contains headers
+                    b2b_billing_df.columns = b2b_billing_df.iloc[0]
+                    b2b_billing_df = b2b_billing_df[1:].reset_index(drop=True)
+                    
+                    # Read B2B order file
+                    b2b_order_df = pd.read_csv(b2b_order_file)
+                    
+                    st.info(f"📊 Processing {len(b2b_billing_df)} B2B billing records...")
+                    
+                    # Process B2B validation
+                    b2b_results = []
+                    
+                    for idx, bill_row in b2b_billing_df.iterrows():
+                        try:
+                            awb = str(bill_row.get('AWB', '')).strip()
+                            if not awb:
+                                continue
+                            
+                            # Get billing details
+                            courier = str(bill_row.get('Courier Name', '')).strip()
+                            applied_zone = str(bill_row.get('Applied Zone', '')).strip()
+                            
+                            # Parse zone (e.g., "W1→S1" to pickup W1, drop S1)
+                            if '→' in applied_zone:
+                                pickup_zone, drop_zone = applied_zone.split('→')
+                            else:
+                                pickup_zone = drop_zone = applied_zone
+                            
+                            # Get charged weight (should already be in kg)
+                            charged_weight_raw = bill_row.get('Chargeable Weight', 0)
+                            try:
+                                charged_weight = float(charged_weight_raw)
+                            except:
+                                charged_weight = 0.0
+                            
+                            # Get charged amounts
+                            freight_charged = float(bill_row.get('Freight Amount (Billing)', 0) or 0)
+                            fsc_charged = float(bill_row.get('Fuel Surcharge (Billing)', 0) or 0)
+                            total_charged = float(bill_row.get('Total Charges (Billing)', 0) or 0)
+                            
+                            # Find orders with this AWB
+                            order_items = b2b_order_df[b2b_order_df['Awb No'].astype(str).str.strip() == awb]
+                            
+                            if order_items.empty:
+                                b2b_results.append({
+                                    'AWB Number': awb,
+                                    'Courier': courier,
+                                    'Zone': applied_zone,
+                                    'Item Details': 'N/A',
+                                    'Quantity': 0,
+                                    'Billable Weight (kg)': 0,
+                                    'Expected Chargeable Weight (kg)': 0,
+                                    'Charged Weight (kg)': charged_weight,
+                                    'Weight Status': 'N/A',
+                                    'Expected Freight (₹)': 0,
+                                    'Charged Freight (₹)': freight_charged,
+                                    'Expected Total (₹)': 0,
+                                    'Charged Total (₹)': total_charged,
+                                    'Analysis': 'Order ID not found in order file',
+                                    'Status': 'Missing'
+                                })
+                            else:
+                                # Calculate total weight
+                                total_dead_weight = 0
+                                total_vol_weight = 0
+                                items_list = []
+                                items_not_configured = []
+                                
+                                for _, order_row in order_items.iterrows():
+                                    sku_id = str(order_row.get('SKU ID', '')).strip()
+                                    sku_title = str(order_row.get('SKU Title', '')).strip()
+                                    quantity = order_row.get('Quantity', 1)
+                                    try:
+                                        quantity = int(float(quantity))
+                                    except:
+                                        quantity = 1
+                                    
+                                    # Try to find weight config
+                                    item_weights = None
+                                    item_name = None
+                                    
+                                    if sku_id in st.session_state.item_weights:
+                                        item_weights = st.session_state.item_weights[sku_id]
+                                        item_name = sku_id
+                                    elif sku_title in st.session_state.item_weights:
+                                        item_weights = st.session_state.item_weights[sku_title]
+                                        item_name = sku_title
+                                    
+                                    if item_weights:
+                                        total_dead_weight += item_weights['dead_weight'] * quantity
+                                        total_vol_weight += item_weights['volumetric_weight'] * quantity
+                                        items_list.append(f"{item_name[:30]} (x{quantity})")
+                                    else:
+                                        items_not_configured.append(f"{sku_id or sku_title} (x{quantity})")
+                                
+                                # Billable weight
+                                billable_weight = max(total_dead_weight, total_vol_weight)
+                                
+                                # Expected chargeable weight (minimum 15 kg for B2B)
+                                expected_chargeable_weight = max(billable_weight, MIN_CHARGEABLE_WEIGHT)
+                                
+                                # Calculate expected freight
+                                rate_per_kg = 0
+                                if pickup_zone in SAFEXPRESS_RATES and drop_zone in SAFEXPRESS_RATES[pickup_zone]:
+                                    rate_per_kg = SAFEXPRESS_RATES[pickup_zone][drop_zone]
+                                
+                                base_freight = expected_chargeable_weight * rate_per_kg
+                                expected_freight = max(base_freight, MIN_FREIGHT)
+                                expected_fsc = expected_freight * (FSC_PERCENT / 100)
+                                
+                                # Check if metro
+                                pickup_city = str(bill_row.get('Pickup City', '')).strip().upper()
+                                drop_city = str(bill_row.get('Drop City', '')).strip().upper()
+                                is_metro = any(metro in pickup_city or metro in drop_city for metro in METRO_CITIES)
+                                
+                                metro_charge = METRO_CHARGE if is_metro else 0
+                                
+                                expected_total = expected_freight + expected_fsc + DOCKET_CHARGE + FOV_CHARGE + metro_charge
+                                
+                                # Validate weight
+                                weight_status = "OK"
+                                analysis_parts = []
+                                status_flag = 'OK'
+                                
+                                if charged_weight > expected_chargeable_weight:
+                                    weight_status = "Weight Error - Overcharged"
+                                    analysis_parts.append(f"Charged weight ({charged_weight}kg) > Expected ({expected_chargeable_weight}kg)")
+                                    status_flag = 'Error'
+                                
+                                # Validate freight
+                                freight_diff = freight_charged - expected_freight
+                                if abs(freight_diff) > 1:
+                                    if freight_diff > 0:
+                                        analysis_parts.append(f"Freight overcharged by ₹{freight_diff:.2f}")
+                                        if status_flag == 'OK':
+                                            status_flag = 'Warning'
+                                    else:
+                                        analysis_parts.append(f"Freight undercharged by ₹{abs(freight_diff):.2f}")
+                                
+                                # Validate total
+                                total_diff = total_charged - expected_total
+                                if abs(total_diff) > 10:
+                                    if total_diff > 0:
+                                        analysis_parts.append(f"Total overcharged by ₹{total_diff:.2f}")
+                                        status_flag = 'Error'
+                                
+                                if items_not_configured:
+                                    analysis_parts.append(f"Items not configured: {', '.join(items_not_configured)}")
+                                    if status_flag == 'OK':
+                                        status_flag = 'Warning'
+                                
+                                if not analysis_parts:
+                                    analysis_parts.append("All checks passed")
+                                
+                                b2b_results.append({
+                                    'AWB Number': awb,
+                                    'Courier': courier,
+                                    'Zone': applied_zone,
+                                    'Item Details': ', '.join(items_list) if items_list else 'Not configured',
+                                    'Quantity': len(order_items),
+                                    'Billable Weight (kg)': round(billable_weight, 2),
+                                    'Expected Chargeable Weight (kg)': round(expected_chargeable_weight, 2),
+                                    'Charged Weight (kg)': charged_weight,
+                                    'Weight Status': weight_status,
+                                    'Rate per KG (₹)': rate_per_kg,
+                                    'Expected Freight (₹)': round(expected_freight, 2),
+                                    'Charged Freight (₹)': round(freight_charged, 2),
+                                    'Expected Total (₹)': round(expected_total, 2),
+                                    'Charged Total (₹)': round(total_charged, 2),
+                                    'Total Difference (₹)': round(total_diff, 2) if billable_weight > 0 else 0,
+                                    'Analysis': ' | '.join(analysis_parts),
+                                    'Status': status_flag
+                                })
+                        
+                        except Exception as row_error:
+                            st.warning(f"Error processing B2B AWB {awb}: {str(row_error)}")
+                            continue
+                    
+                    if b2b_results:
+                        st.session_state.validation_results = pd.DataFrame(b2b_results)
+                        st.session_state.validation_type = 'B2B'
+                        st.success(f"✅ B2B Validation completed! Processed {len(b2b_results)} AWBs")
+                        st.rerun()
+                    else:
+                        st.error("No valid B2B results generated. Please check your files.")
+                
+                except Exception as e:
+                    st.error(f"❌ Error during B2B validation: {str(e)}")
+                    import traceback
+                    with st.expander("View detailed error"):
+                        st.code(traceback.format_exc())
 
 with tab3:
     if st.session_state.validation_results is not None:
         results_df = st.session_state.validation_results
+        validation_type = st.session_state.validation_type or 'Unknown'
         
         # Metrics
-        st.markdown("### 📊 Validation Summary")
+        st.markdown(f"### 📊 {validation_type} Validation Summary")
         col1, col2, col3, col4, col5 = st.columns(5)
         
         total_records = len(results_df)
@@ -781,10 +1010,12 @@ with tab3:
                 results_df.to_excel(writer, index=False, sheet_name='Validation Results')
             excel_data = output.getvalue()
             
+            filename_prefix = f"mama_nourish_{validation_type.lower()}_validation" if validation_type else "billing_validation"
+            
             st.download_button(
                 label="📊 Download as Excel",
                 data=excel_data,
-                file_name="mama_nourish_billing_validation.xlsx",
+                file_name=f"{filename_prefix}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True
             )
@@ -795,7 +1026,7 @@ with tab3:
             st.download_button(
                 label="📄 Download as CSV",
                 data=csv_data,
-                file_name="mama_nourish_billing_validation.csv",
+                file_name=f"{filename_prefix}.csv",
                 mime="text/csv",
                 use_container_width=True
             )
