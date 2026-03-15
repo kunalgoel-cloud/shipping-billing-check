@@ -3,40 +3,196 @@ import pandas as pd
 import json
 from pathlib import Path
 from io import BytesIO
+import os
+import re
 
 # Page configuration
 st.set_page_config(
-    page_title="Shipment Billing Validator",
+    page_title="Shipment Billing Validator - Mama Nourish",
     page_icon="📦",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS for refined, data-focused aesthetic
+# File paths for persistent storage
+ITEM_WEIGHTS_FILE = "item_weights_persistent.json"
+RATE_CARD_FILE = "rate_card_data.json"
+
+# Metro cities definition
+METRO_CITIES = ['Delhi', 'Mumbai', 'Bangalore', 'Kolkata', 'Chennai', 
+                'DELHI', 'MUMBAI', 'BANGALORE', 'KOLKATA', 'CHENNAI',
+                'New Delhi', 'Navi Mumbai']
+
+# Special zones
+SPECIAL_ZONES = ['Jammu and Kashmir', 'Himachal Pradesh', 'Kerala', 
+                 'Andaman', 'Lakshadweep', 'Leh', 'Ladakh',
+                 'Arunachal Pradesh', 'Assam', 'Manipur', 'Meghalaya', 
+                 'Mizoram', 'Nagaland', 'Tripura', 'Sikkim',
+                 'J&K', 'HP', 'KL', 'AN', 'LD', 'AR', 'AS', 'MN', 'ML', 'MZ', 'NL', 'TR', 'SK']
+
+# Hardcoded rate card (from the PDF)
+RATE_CARD = {
+    'Bluedart Surface': {
+        'Local': {'0-500': 30.0, 'add_500': 24.0, '2kg': 96.0, 'add_1kg_2-5': 46.0, '5kg': 227.0, 'add_1kg_5-10': 45.0, '10kg': 449.0, 'add_1kg_10+': 44.0},
+        'Within State': {'0-500': 36.0, 'add_500': 26.0, '2kg': 104.0, 'add_1kg_2-5': 49.0, '5kg': 250.0, 'add_1kg_5-10': 47.2, '10kg': 477.0, 'add_1kg_10+': 47.0},
+        'Metro to Metro': {'0-500': 42.0, 'add_500': 33.0, '2kg': 134.0, 'add_1kg_2-5': 63.0, '5kg': 312.0, 'add_1kg_5-10': 61.0, '10kg': 617.0, 'add_1kg_10+': 61.0},
+        'Rest of India': {'0-500': 47.0, 'add_500': 38.0, '2kg': 153.0, 'add_1kg_2-5': 72.0, '5kg': 355.0, 'add_1kg_5-10': 69.0, '10kg': 700.0, 'add_1kg_10+': 69.0},
+        'Special Zone': {'0-500': 56.0, 'add_500': 50.0, '2kg': 202.0, 'add_1kg_2-5': 95.0, '5kg': 469.0, 'add_1kg_5-10': 92.0, '10kg': 924.0, 'add_1kg_10+': 91.0},
+    },
+    'Bluedart Air': {
+        'Local': {'0-500': 36.0, 'add_500': 35.0},
+        'Within State': {'0-500': 40.0, 'add_500': 39.0},
+        'Metro to Metro': {'0-500': 46.0, 'add_500': 46.0},
+        'Rest of India': {'0-500': 57.0, 'add_500': 55.0},
+        'Special Zone': {'0-500': 76.0, 'add_500': 74.0},
+    },
+    'Delhivery Surface': {
+        'Local': {'0-500': 21.0, 'add_500': 17.0, '2kg': 71.0, 'add_1kg_2-5': 27.0, '5kg': 145.0, 'add_1kg_5-10': 23.0, '10kg': 238.0, 'add_1kg_10+': 14.0},
+        'Within State': {'0-500': 25.0, 'add_500': 21.0, '2kg': 83.0, 'add_1kg_2-5': 32.0, '5kg': 150.0, 'add_1kg_5-10': 24.0, '10kg': 260.0, 'add_1kg_10+': 17.0},
+        'Metro to Metro': {'0-500': 31.0, 'add_500': 24.0, '2kg': 90.0, 'add_1kg_2-5': 35.0, '5kg': 178.0, 'add_1kg_5-10': 24.0, '10kg': 281.0, 'add_1kg_10+': 17.0},
+        'Rest of India': {'0-500': 34.0, 'add_500': 23.0, '2kg': 97.0, 'add_1kg_2-5': 37.0, '5kg': 199.0, 'add_1kg_5-10': 25.0, '10kg': 299.0, 'add_1kg_10+': 18.0},
+        'Special Zone': {'0-500': 39.0, 'add_500': 25.0, '2kg': 109.0, 'add_1kg_2-5': 39.0, '5kg': 239.0, 'add_1kg_5-10': 35.0, '10kg': 387.0, 'add_1kg_10+': 22.0},
+    },
+    'Delhivery Air': {
+        'Local': {'0-500': 30.0, 'add_500': 28.0},
+        'Within State': {'0-500': 35.0, 'add_500': 34.0},
+        'Metro to Metro': {'0-500': 46.0, 'add_500': 38.0},
+        'Rest of India': {'0-500': 56.0, 'add_500': 48.0},
+        'Special Zone': {'0-500': 68.0, 'add_500': 62.0},
+    }
+}
+
+# Load item weights from file if exists
+def load_item_weights():
+    if os.path.exists(ITEM_WEIGHTS_FILE):
+        try:
+            with open(ITEM_WEIGHTS_FILE, 'r') as f:
+                return json.load(f)
+        except Exception as e:
+            st.sidebar.error(f"Error loading saved item weights: {str(e)}")
+            return {}
+    return {}
+
+# Save item weights to file
+def save_item_weights(weights):
+    try:
+        with open(ITEM_WEIGHTS_FILE, 'w') as f:
+            json.dump(weights, f, indent=2)
+    except Exception as e:
+        st.sidebar.error(f"Error saving item weights: {str(e)}")
+
+def determine_zone(origin_city, dest_city, dest_state):
+    """Determine shipping zone based on origin and destination"""
+    origin_city = str(origin_city).strip().title() if pd.notna(origin_city) else ""
+    dest_city = str(dest_city).strip().title() if pd.notna(dest_city) else ""
+    dest_state = str(dest_state).strip().upper() if pd.notna(dest_state) else ""
+    
+    # Check for special zones
+    for sz in SPECIAL_ZONES:
+        if sz.upper() in dest_state or sz.upper() in dest_city:
+            return 'Special Zone'
+    
+    # Check if same city (Local)
+    if origin_city and dest_city and origin_city.lower() == dest_city.lower():
+        return 'Local'
+    
+    # Check if metro to metro
+    origin_is_metro = any(metro.lower() in origin_city.lower() for metro in METRO_CITIES)
+    dest_is_metro = any(metro.lower() in dest_city.lower() for metro in METRO_CITIES)
+    
+    if origin_is_metro and dest_is_metro:
+        return 'Metro to Metro'
+    
+    # Within state (simplified - would need state mapping for origin)
+    # For Bhiwandi (Maharashtra), check if destination is also Maharashtra
+    if 'MH' in dest_state or 'MAHARASHTRA' in dest_state:
+        return 'Within State'
+    
+    # Default to Rest of India
+    return 'Rest of India'
+
+def calculate_freight_cost(weight_kg, zone, courier):
+    """Calculate freight cost based on weight, zone, and courier"""
+    if courier not in RATE_CARD:
+        return None, "Courier not in rate card"
+    
+    if zone not in RATE_CARD[courier]:
+        return None, f"Zone {zone} not found for {courier}"
+    
+    rates = RATE_CARD[courier][zone]
+    
+    # Convert weight to grams for easier calculation
+    weight_grams = weight_kg * 1000
+    
+    # For Air couriers (simpler rate structure)
+    if 'Air' in courier:
+        if weight_grams <= 500:
+            return rates['0-500'], "Base rate (0-500g)"
+        else:
+            # Calculate additional 500g slabs
+            additional_slabs = ((weight_grams - 500) / 500)
+            if additional_slabs != int(additional_slabs):
+                additional_slabs = int(additional_slabs) + 1
+            else:
+                additional_slabs = int(additional_slabs)
+            
+            cost = rates['0-500'] + (additional_slabs * rates['add_500'])
+            return cost, f"Base + {additional_slabs} x 500g"
+    
+    # For Surface couriers (more complex structure)
+    if weight_kg <= 0.5:
+        return rates['0-500'], "Base rate (0-500g)"
+    elif weight_kg <= 2.0:
+        # Between 0.5kg and 2kg
+        additional_slabs = ((weight_grams - 500) / 500)
+        if additional_slabs != int(additional_slabs):
+            additional_slabs = int(additional_slabs) + 1
+        else:
+            additional_slabs = int(additional_slabs)
+        cost = rates['0-500'] + (additional_slabs * rates['add_500'])
+        return cost, f"0-2kg: Base + {additional_slabs} x 500g"
+    elif weight_kg <= 5.0:
+        # Between 2kg and 5kg
+        additional_kg = weight_kg - 2.0
+        if additional_kg != int(additional_kg):
+            additional_kg = int(additional_kg) + 1
+        else:
+            additional_kg = int(additional_kg)
+        cost = rates['2kg'] + (additional_kg * rates['add_1kg_2-5'])
+        return cost, f"2-5kg: 2kg base + {additional_kg} x 1kg"
+    elif weight_kg <= 10.0:
+        # Between 5kg and 10kg
+        additional_kg = weight_kg - 5.0
+        if additional_kg != int(additional_kg):
+            additional_kg = int(additional_kg) + 1
+        else:
+            additional_kg = int(additional_kg)
+        cost = rates['5kg'] + (additional_kg * rates['add_1kg_5-10'])
+        return cost, f"5-10kg: 5kg base + {additional_kg} x 1kg"
+    else:
+        # Above 10kg
+        additional_kg = weight_kg - 10.0
+        if additional_kg != int(additional_kg):
+            additional_kg = int(additional_kg) + 1
+        else:
+            additional_kg = int(additional_kg)
+        cost = rates['10kg'] + (additional_kg * rates['add_1kg_10+'])
+        return cost, f"10+kg: 10kg base + {additional_kg} x 1kg"
+
+# Custom CSS
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
     
-    /* Global styles */
     .stApp {
         background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
     }
     
-    /* Typography */
     h1, h2, h3, h4, h5, h6 {
         font-family: 'IBM Plex Sans', sans-serif !important;
         font-weight: 600 !important;
     }
     
-    p, div, span, label {
-        font-family: 'IBM Plex Sans', sans-serif !important;
-    }
-    
-    code, pre {
-        font-family: 'IBM Plex Mono', monospace !important;
-    }
-    
-    /* Main title */
     .main-title {
         font-size: 2.5rem;
         font-weight: 600;
@@ -54,17 +210,6 @@ st.markdown("""
         margin-bottom: 2rem;
     }
     
-    /* Cards */
-    .card {
-        background: white;
-        border-radius: 12px;
-        padding: 1.5rem;
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-        margin-bottom: 1.5rem;
-        border-left: 4px solid #667eea;
-    }
-    
-    /* Metric cards */
     .metric-card {
         background: white;
         border-radius: 10px;
@@ -89,45 +234,6 @@ st.markdown("""
         margin-top: 0.5rem;
     }
     
-    /* Status badges */
-    .status-ok {
-        background: #d1fae5;
-        color: #065f46;
-        padding: 0.25rem 0.75rem;
-        border-radius: 9999px;
-        font-size: 0.875rem;
-        font-weight: 500;
-        display: inline-block;
-    }
-    
-    .status-error {
-        background: #fee2e2;
-        color: #991b1b;
-        padding: 0.25rem 0.75rem;
-        border-radius: 9999px;
-        font-size: 0.875rem;
-        font-weight: 500;
-        display: inline-block;
-    }
-    
-    .status-warning {
-        background: #fef3c7;
-        color: #92400e;
-        padding: 0.25rem 0.75rem;
-        border-radius: 9999px;
-        font-size: 0.875rem;
-        font-weight: 500;
-        display: inline-block;
-    }
-    
-    /* File uploader */
-    .uploadedFile {
-        border: 2px dashed #cbd5e1 !important;
-        border-radius: 8px !important;
-        background: #f8fafc !important;
-    }
-    
-    /* Buttons */
     .stButton>button {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         color: white;
@@ -135,7 +241,6 @@ st.markdown("""
         border-radius: 8px;
         padding: 0.625rem 1.5rem;
         font-weight: 500;
-        font-family: 'IBM Plex Sans', sans-serif;
         transition: transform 0.2s;
     }
     
@@ -143,67 +248,18 @@ st.markdown("""
         transform: translateY(-2px);
         box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
     }
-    
-    /* Sidebar */
-    .css-1d391kg, [data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #667eea 0%, #764ba2 100%);
-    }
-    
-    .css-1d391kg .sidebar-content, [data-testid="stSidebar"] .sidebar-content {
-        color: white;
-    }
-    
-    /* Dataframe styling */
-    .dataframe {
-        border-radius: 8px !important;
-        overflow: hidden !important;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.08) !important;
-    }
-    
-    /* Info boxes */
-    .info-box {
-        background: #dbeafe;
-        border-left: 4px solid #3b82f6;
-        padding: 1rem;
-        border-radius: 4px;
-        margin: 1rem 0;
-    }
-    
-    .success-box {
-        background: #d1fae5;
-        border-left: 4px solid #10b981;
-        padding: 1rem;
-        border-radius: 4px;
-        margin: 1rem 0;
-    }
-    
-    .warning-box {
-        background: #fef3c7;
-        border-left: 4px solid #f59e0b;
-        padding: 1rem;
-        border-radius: 4px;
-        margin: 1rem 0;
-    }
-    
-    .error-box {
-        background: #fee2e2;
-        border-left: 4px solid #ef4444;
-        padding: 1rem;
-        border-radius: 4px;
-        margin: 1rem 0;
-    }
 </style>
 """, unsafe_allow_html=True)
 
 # Initialize session state
 if 'item_weights' not in st.session_state:
-    st.session_state.item_weights = {}
+    st.session_state.item_weights = load_item_weights()
 if 'validation_results' not in st.session_state:
     st.session_state.validation_results = None
 
 # Header
-st.markdown('<h1 class="main-title">📦 Shipment Billing Validator</h1>', unsafe_allow_html=True)
-st.markdown('<p class="subtitle">Automated weight-based billing verification system</p>', unsafe_allow_html=True)
+st.markdown('<h1 class="main-title">📦 Shipment Billing Validator - Mama Nourish</h1>', unsafe_allow_html=True)
+st.markdown('<p class="subtitle">Automated billing verification with rate card validation</p>', unsafe_allow_html=True)
 
 # Sidebar - Settings
 with st.sidebar:
@@ -213,12 +269,12 @@ with st.sidebar:
     # Add new item
     st.markdown("#### Add New Item")
     with st.form("add_item_form"):
-        item_name = st.text_input("Item Name")
+        item_name = st.text_input("Item Name (e.g., SKU ID or Title)")
         col1, col2 = st.columns(2)
         with col1:
-            dead_weight = st.number_input("Dead Weight (kg)", min_value=0.0, step=0.1, format="%.2f")
+            dead_weight = st.number_input("Dead Weight (kg)", min_value=0.0, step=0.01, format="%.3f")
         with col2:
-            volumetric_weight = st.number_input("Volumetric Weight (kg)", min_value=0.0, step=0.1, format="%.2f")
+            volumetric_weight = st.number_input("Volumetric Weight (kg)", min_value=0.0, step=0.01, format="%.3f")
         
         if st.form_submit_button("➕ Add Item", use_container_width=True):
             if item_name:
@@ -226,7 +282,9 @@ with st.sidebar:
                     'dead_weight': dead_weight,
                     'volumetric_weight': volumetric_weight
                 }
+                save_item_weights(st.session_state.item_weights)
                 st.success(f"✓ Added {item_name}")
+                st.rerun()
             else:
                 st.error("Please enter an item name")
     
@@ -234,14 +292,24 @@ with st.sidebar:
     
     # Display configured items
     if st.session_state.item_weights:
-        st.markdown("#### Configured Items")
-        for item, weights in st.session_state.item_weights.items():
-            with st.expander(f"📦 {item}"):
+        st.markdown(f"#### Configured Items ({len(st.session_state.item_weights)})")
+        
+        # Search/filter
+        search_term = st.text_input("🔍 Search items", "")
+        
+        filtered_items = {k: v for k, v in st.session_state.item_weights.items() 
+                         if search_term.lower() in k.lower()}
+        
+        for item, weights in filtered_items.items():
+            with st.expander(f"📦 {item[:30]}..."):
                 st.write(f"**Dead Weight:** {weights['dead_weight']} kg")
                 st.write(f"**Volumetric Weight:** {weights['volumetric_weight']} kg")
                 if st.button(f"🗑️ Delete", key=f"del_{item}"):
                     del st.session_state.item_weights[item]
+                    save_item_weights(st.session_state.item_weights)
                     st.rerun()
+    else:
+        st.info("No items configured yet. Add items above.")
     
     st.markdown("---")
     
@@ -265,6 +333,7 @@ with st.sidebar:
         try:
             imported_settings = json.loads(uploaded_settings.read())
             st.session_state.item_weights.update(imported_settings)
+            save_item_weights(st.session_state.item_weights)
             st.success("✓ Settings imported successfully")
             st.rerun()
         except Exception as e:
@@ -274,100 +343,100 @@ with st.sidebar:
 tab1, tab2, tab3 = st.tabs(["📋 Validation", "📊 Results", "ℹ️ Instructions"])
 
 with tab1:
-    st.markdown('<div class="card">', unsafe_allow_html=True)
     st.markdown("### File Upload")
+    
+    st.info("📄 **Upload the 3 required files:** Billing Excel (Freight sheet), Order CSV, and Rate Card PDF (already configured)")
     
     col1, col2 = st.columns(2)
     
     with col1:
         st.markdown("#### 📄 Billing File (Excel)")
         billing_file = st.file_uploader(
-            "Upload billing summary file",
+            "Upload Mama Nourish billing file",
             type=['xlsx', 'xls'],
             key="billing_file",
-            help="Upload the Excel file containing billing information"
+            help="Upload the Excel file with 'Freight' sheet"
         )
-        
-        if billing_file:
-            try:
-                excel_file = pd.ExcelFile(billing_file)
-                sheet_names = excel_file.sheet_names
-                billing_sheet = st.selectbox("Select Billing Sheet", sheet_names)
-            except Exception as e:
-                st.error(f"Error reading Excel file: {str(e)}")
-                billing_sheet = None
-        else:
-            billing_sheet = None
     
     with col2:
-        st.markdown("#### 📦 Order File (Excel/CSV)")
+        st.markdown("#### 📦 Order File (CSV)")
         order_file = st.file_uploader(
-            "Upload order details file",
-            type=['xlsx', 'xls', 'csv'],
+            "Upload order details CSV",
+            type=['csv'],
             key="order_file",
-            help="Upload the file containing order, item, and quantity mapping"
+            help="Upload the CSV containing SKU, AWB, and quantity"
         )
-    
-    st.markdown('</div>', unsafe_allow_html=True)
     
     # Validation button
     if st.button("🔍 Validate Billing", use_container_width=True, type="primary"):
-        if not st.session_state.item_weights:
-            st.error("⚠️ Please configure item weights in the sidebar first")
-        elif not billing_file or not order_file:
+        if not billing_file or not order_file:
             st.error("⚠️ Please upload both billing and order files")
         else:
             with st.spinner("Analyzing billing data..."):
                 try:
-                    # Read billing file
-                    billing_df = pd.read_excel(billing_file, sheet_name=billing_sheet)
+                    # Read billing file (Freight sheet)
+                    billing_df = pd.read_excel(billing_file, sheet_name='Freight')
                     
                     # Read order file
-                    if order_file.name.endswith('.csv'):
-                        order_df = pd.read_csv(order_file)
-                    else:
-                        order_df = pd.read_excel(order_file)
+                    order_df = pd.read_csv(order_file)
                     
-                    # Validate column names (flexible matching)
-                    billing_cols = billing_df.columns.str.lower().str.strip()
-                    order_cols = order_df.columns.str.lower().str.strip()
+                    # Clean column names
+                    billing_df.columns = billing_df.columns.str.strip()
+                    order_df.columns = order_df.columns.str.strip()
                     
-                    # Expected columns
-                    required_billing_cols = ['awb', 'charged_weight', 'weight']
-                    required_order_cols = ['awb', 'item', 'quantity', 'order', 'order_id']
+                    st.info(f"📊 Processing {len(billing_df)} billing records and {len(order_df)} order items...")
                     
-                    # Find matching columns
-                    awb_col_billing = next((col for col in billing_df.columns if 'awb' in col.lower()), None)
-                    weight_col_billing = next((col for col in billing_df.columns if 'weight' in col.lower() or 'charged' in col.lower()), None)
+                    # Process validation
+                    results = []
                     
-                    awb_col_order = next((col for col in order_df.columns if 'awb' in col.lower()), None)
-                    item_col_order = next((col for col in order_df.columns if 'item' in col.lower()), None)
-                    qty_col_order = next((col for col in order_df.columns if 'quantity' in col.lower() or 'qty' in col.lower()), None)
-                    
-                    if not all([awb_col_billing, weight_col_billing, awb_col_order, item_col_order, qty_col_order]):
-                        st.error("❌ Required columns not found in uploaded files. Please check column names.")
-                        st.info(f"Billing columns found: {', '.join(billing_df.columns)}")
-                        st.info(f"Order columns found: {', '.join(order_df.columns)}")
-                    else:
-                        # Process validation
-                        results = []
-                        
-                        for _, bill_row in billing_df.iterrows():
-                            awb = str(bill_row[awb_col_billing]).strip()
-                            charged_weight = float(bill_row[weight_col_billing])
+                    for idx, bill_row in billing_df.iterrows():
+                        try:
+                            awb = str(bill_row['AWB NUMBER']).strip() if pd.notna(bill_row.get('AWB NUMBER')) else ""
+                            
+                            # Skip if no AWB
+                            if not awb:
+                                continue
+                            
+                            # Get charged weight - handle non-numeric values
+                            charged_weight_raw = bill_row.get('Weight', 0)
+                            try:
+                                charged_weight = float(charged_weight_raw)
+                            except (ValueError, TypeError):
+                                charged_weight = 0.0
+                            
+                            # Get other billing details
+                            courier = str(bill_row.get('Courier Parent', '')).strip()
+                            charged_amount = bill_row.get('Base Freight Cost WithOutTax(exCOD_exQC)', 0)
+                            try:
+                                charged_amount = float(charged_amount)
+                            except:
+                                charged_amount = 0.0
+                            
+                            origin_city = bill_row.get('Origin City', 'Bhiwandi')
+                            dest_city = bill_row.get('Destination City', '')
+                            dest_state = bill_row.get('Destination Pincode', '')  # We'll use state from orders
                             
                             # Find orders with this AWB
-                            order_items = order_df[order_df[awb_col_order].astype(str).str.strip() == awb]
+                            order_items = order_df[order_df['Awb No'].astype(str).str.strip() == awb]
                             
                             if order_items.empty:
+                                # AWB not found in orders
                                 results.append({
                                     'AWB Number': awb,
-                                    'Item Name': 'N/A',
-                                    'Item Quantity': 0,
-                                    'Calculated Dead Weight': 0,
-                                    'Calculated Volume Weight': 0,
-                                    'Charged Weight': charged_weight,
-                                    'Analysis': 'Order ID not found',
+                                    'Courier': courier if courier else 'Not Specified',
+                                    'Item Details': 'N/A',
+                                    'Quantity': 0,
+                                    'Calculated Dead Weight (kg)': 0,
+                                    'Calculated Vol Weight (kg)': 0,
+                                    'Billable Weight (kg)': 0,
+                                    'Charged Weight (kg)': charged_weight,
+                                    'Weight Status': 'N/A',
+                                    'Zone': 'N/A',
+                                    'Expected Freight (₹)': 0,
+                                    'Charged Freight (₹)': charged_amount,
+                                    'Freight Difference (₹)': 0,
+                                    'Billing Status': 'Missing Order',
+                                    'Analysis': 'Order ID not found in order file',
                                     'Status': 'Missing'
                                 })
                             else:
@@ -375,49 +444,134 @@ with tab1:
                                 total_dead_weight = 0
                                 total_vol_weight = 0
                                 items_list = []
+                                items_not_configured = []
+                                
+                                # Get destination details from first order item
+                                dest_state = str(order_items.iloc[0].get('State', '')).strip()
+                                dest_city = str(order_items.iloc[0].get('city', '')).strip()
+                                order_courier = str(order_items.iloc[0].get('Courier', '')).strip()
+                                
+                                # Use order courier if billing courier is empty
+                                if not courier and order_courier:
+                                    courier = order_courier
                                 
                                 for _, order_row in order_items.iterrows():
-                                    item_name = str(order_row[item_col_order]).strip()
-                                    quantity = int(order_row[qty_col_order])
+                                    sku_id = str(order_row.get('SKU ID', '')).strip()
+                                    sku_title = str(order_row.get('SKU Title', '')).strip()
+                                    quantity = order_row.get('Quantity', 1)
+                                    try:
+                                        quantity = int(float(quantity))
+                                    except:
+                                        quantity = 1
                                     
-                                    if item_name in st.session_state.item_weights:
-                                        item_weights = st.session_state.item_weights[item_name]
+                                    # Try to find weight config (try SKU ID first, then title)
+                                    item_weights = None
+                                    item_name = None
+                                    
+                                    if sku_id in st.session_state.item_weights:
+                                        item_weights = st.session_state.item_weights[sku_id]
+                                        item_name = sku_id
+                                    elif sku_title in st.session_state.item_weights:
+                                        item_weights = st.session_state.item_weights[sku_title]
+                                        item_name = sku_title
+                                    
+                                    if item_weights:
                                         total_dead_weight += item_weights['dead_weight'] * quantity
                                         total_vol_weight += item_weights['volumetric_weight'] * quantity
-                                        items_list.append(f"{item_name} (x{quantity})")
+                                        items_list.append(f"{item_name[:20]} (x{quantity})")
                                     else:
-                                        items_list.append(f"{item_name} (x{quantity}) [NOT CONFIGURED]")
+                                        items_not_configured.append(f"{sku_id or sku_title} (x{quantity})")
                                 
-                                calculated_weight = max(total_dead_weight, total_vol_weight)
+                                # Determine billable weight (higher of dead/vol)
+                                billable_weight = max(total_dead_weight, total_vol_weight)
                                 
-                                # Compare with charged weight
-                                if calculated_weight > charged_weight:
-                                    analysis = "Incorrect weight - Calculated weight exceeds charged weight"
-                                    status = 'Error'
-                                else:
-                                    analysis = "OK"
-                                    status = 'OK'
+                                # Determine zone
+                                zone = determine_zone(origin_city, dest_city, dest_state)
+                                
+                                # Calculate expected freight
+                                expected_freight = None
+                                freight_calc_note = ""
+                                
+                                if courier and billable_weight > 0:
+                                    expected_freight, freight_calc_note = calculate_freight_cost(billable_weight, zone, courier)
+                                
+                                # Determine statuses
+                                weight_status = "OK"
+                                billing_status = "OK"
+                                analysis_parts = []
+                                status_flag = 'OK'
+                                
+                                # Check weight discrepancy
+                                if billable_weight > charged_weight and charged_weight > 0:
+                                    weight_status = "Weight Error"
+                                    analysis_parts.append(f"Calculated weight ({billable_weight:.2f}kg) > Charged weight ({charged_weight:.2f}kg)")
+                                    status_flag = 'Error'
+                                
+                                # Check courier
+                                if not courier:
+                                    analysis_parts.append("Courier not specified")
+                                    status_flag = 'Warning'
+                                    billing_status = "Courier Missing"
+                                
+                                # Check freight amount
+                                if expected_freight is not None and charged_amount > 0:
+                                    freight_diff = charged_amount - expected_freight
+                                    if freight_diff > 0.5:  # Allow 0.5 rupee tolerance
+                                        billing_status = "Overcharged"
+                                        analysis_parts.append(f"Overcharged by ₹{freight_diff:.2f}")
+                                        status_flag = 'Error'
+                                    elif freight_diff < -0.5:
+                                        billing_status = "Undercharged"
+                                        analysis_parts.append(f"Undercharged by ₹{abs(freight_diff):.2f}")
+                                elif expected_freight is None and courier:
+                                    analysis_parts.append(f"Cannot calculate freight: {freight_calc_note}")
+                                    billing_status = "Cannot Verify"
+                                    status_flag = 'Warning'
+                                
+                                # Check for unconfigured items
+                                if items_not_configured:
+                                    analysis_parts.append(f"Items not configured: {', '.join(items_not_configured)}")
+                                    status_flag = 'Warning'
+                                
+                                if not analysis_parts:
+                                    analysis_parts.append("All checks passed")
                                 
                                 results.append({
                                     'AWB Number': awb,
-                                    'Item Name': ', '.join(items_list),
-                                    'Item Quantity': len(order_items),
-                                    'Calculated Dead Weight': round(total_dead_weight, 2),
-                                    'Calculated Volume Weight': round(total_vol_weight, 2),
-                                    'Charged Weight': charged_weight,
-                                    'Analysis': analysis,
-                                    'Status': status
+                                    'Courier': courier if courier else '⚠️ NOT SPECIFIED',
+                                    'Item Details': ', '.join(items_list) if items_list else 'Not configured',
+                                    'Quantity': len(order_items),
+                                    'Calculated Dead Weight (kg)': round(total_dead_weight, 3),
+                                    'Calculated Vol Weight (kg)': round(total_vol_weight, 3),
+                                    'Billable Weight (kg)': round(billable_weight, 3),
+                                    'Charged Weight (kg)': charged_weight,
+                                    'Weight Status': weight_status,
+                                    'Zone': zone,
+                                    'Expected Freight (₹)': round(expected_freight, 2) if expected_freight else 'N/A',
+                                    'Charged Freight (₹)': round(charged_amount, 2),
+                                    'Freight Difference (₹)': round(charged_amount - expected_freight, 2) if expected_freight else 'N/A',
+                                    'Billing Status': billing_status,
+                                    'Analysis': ' | '.join(analysis_parts),
+                                    'Status': status_flag
                                 })
                         
-                        # Store results
+                        except Exception as row_error:
+                            st.warning(f"Error processing AWB {awb}: {str(row_error)}")
+                            continue
+                    
+                    # Store results
+                    if results:
                         st.session_state.validation_results = pd.DataFrame(results)
-                        st.success("✅ Validation completed successfully!")
+                        st.success(f"✅ Validation completed! Processed {len(results)} AWBs")
                         st.rerun()
+                    else:
+                        st.error("No valid results generated. Please check your files.")
                         
                 except Exception as e:
                     st.error(f"❌ Error during validation: {str(e)}")
                     import traceback
-                    st.code(traceback.format_exc())
+                    with st.expander("View detailed error"):
+                        st.code(traceback.format_exc())
 
 with tab2:
     if st.session_state.validation_results is not None:
@@ -425,10 +579,11 @@ with tab2:
         
         # Metrics
         st.markdown("### 📊 Validation Summary")
-        col1, col2, col3, col4 = st.columns(4)
+        col1, col2, col3, col4, col5 = st.columns(5)
         
         total_records = len(results_df)
         error_records = len(results_df[results_df['Status'] == 'Error'])
+        warning_records = len(results_df[results_df['Status'] == 'Warning'])
         missing_records = len(results_df[results_df['Status'] == 'Missing'])
         ok_records = len(results_df[results_df['Status'] == 'OK'])
         
@@ -452,17 +607,43 @@ with tab2:
             st.markdown(f"""
             <div class="metric-card" style="border-top-color: #ef4444;">
                 <div class="metric-value" style="color: #ef4444;">{error_records}</div>
-                <div class="metric-label">Weight Errors</div>
+                <div class="metric-label">Errors</div>
             </div>
             """, unsafe_allow_html=True)
         
         with col4:
             st.markdown(f"""
             <div class="metric-card" style="border-top-color: #f59e0b;">
-                <div class="metric-value" style="color: #f59e0b;">{missing_records}</div>
-                <div class="metric-label">Missing Orders</div>
+                <div class="metric-value" style="color: #f59e0b;">{warning_records}</div>
+                <div class="metric-label">Warnings</div>
             </div>
             """, unsafe_allow_html=True)
+        
+        with col5:
+            st.markdown(f"""
+            <div class="metric-card" style="border-top-color: #8b5cf6;">
+                <div class="metric-value" style="color: #8b5cf6;">{missing_records}</div>
+                <div class="metric-label">Missing</div>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        st.markdown("---")
+        
+        # Financial summary
+        if 'Freight Difference (₹)' in results_df.columns:
+            valid_diffs = results_df[results_df['Freight Difference (₹)'] != 'N/A']['Freight Difference (₹)']
+            if len(valid_diffs) > 0:
+                total_overcharge = valid_diffs[valid_diffs > 0].sum()
+                total_undercharge = abs(valid_diffs[valid_diffs < 0].sum())
+                
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Total Overcharged", f"₹{total_overcharge:,.2f}", delta=None, delta_color="inverse")
+                with col2:
+                    st.metric("Total Undercharged", f"₹{total_undercharge:,.2f}")
+                with col3:
+                    net_diff = total_overcharge - total_undercharge
+                    st.metric("Net Difference", f"₹{net_diff:,.2f}", delta=None, delta_color="off")
         
         st.markdown("---")
         
@@ -470,27 +651,31 @@ with tab2:
         st.markdown("### 🔍 Filter Results")
         filter_option = st.radio(
             "Show:",
-            ["All Records", "Errors Only", "Missing Orders Only", "Correct Records Only"],
+            ["All Records", "Errors Only", "Warnings Only", "Missing Orders Only", "Correct Records Only"],
             horizontal=True
         )
         
         filtered_df = results_df.copy()
         if filter_option == "Errors Only":
             filtered_df = results_df[results_df['Status'] == 'Error']
+        elif filter_option == "Warnings Only":
+            filtered_df = results_df[results_df['Status'] == 'Warning']
         elif filter_option == "Missing Orders Only":
             filtered_df = results_df[results_df['Status'] == 'Missing']
         elif filter_option == "Correct Records Only":
             filtered_df = results_df[results_df['Status'] == 'OK']
         
         # Display results
-        st.markdown("### 📋 Detailed Results")
+        st.markdown(f"### 📋 Detailed Results ({len(filtered_df)} records)")
         
         # Style the dataframe
         def highlight_status(row):
             if row['Status'] == 'Error':
                 return ['background-color: #fee2e2'] * len(row)
-            elif row['Status'] == 'Missing':
+            elif row['Status'] == 'Warning':
                 return ['background-color: #fef3c7'] * len(row)
+            elif row['Status'] == 'Missing':
+                return ['background-color: #e0e7ff'] * len(row)
             elif row['Status'] == 'OK':
                 return ['background-color: #d1fae5'] * len(row)
             return [''] * len(row)
@@ -512,7 +697,7 @@ with tab2:
             st.download_button(
                 label="📊 Download as Excel",
                 data=excel_data,
-                file_name="billing_validation_results.xlsx",
+                file_name="mama_nourish_billing_validation.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True
             )
@@ -523,7 +708,7 @@ with tab2:
             st.download_button(
                 label="📄 Download as CSV",
                 data=csv_data,
-                file_name="billing_validation_results.csv",
+                file_name="mama_nourish_billing_validation.csv",
                 mime="text/csv",
                 use_container_width=True
             )
@@ -532,75 +717,98 @@ with tab2:
 
 with tab3:
     st.markdown("""
-    <div class="info-box">
-        <h3>📖 How to Use This Application</h3>
-    </div>
-    """, unsafe_allow_html=True)
+    ### 📖 How to Use This Application
     
-    st.markdown("""
+    This application validates billing for **Mama Nourish** shipments by:
+    1. Comparing charged weights against calculated weights from item configurations
+    2. Validating freight charges against the Prozo rate card
+    3. Identifying missing couriers and unconfigured items
+    
     ### Step 1: Configure Item Weights
     
-    Use the sidebar to configure weight settings for each item:
-    - Click **"Add New Item"** in the sidebar
-    - Enter the item name exactly as it appears in your order file
-    - Set the **Dead Weight** (actual physical weight in kg)
-    - Set the **Volumetric Weight** (dimensional weight in kg)
-    - Click **"Add Item"** to save
+    Add each SKU with its weight information:
+    - Use **SKU ID** or **SKU Title** from your order file
+    - Enter **Dead Weight** (actual physical weight)
+    - Enter **Volumetric Weight** (L × B × H / 5000 in cm)
+    - Click "Add Item" to save persistently
     
-    ### Step 2: Upload Files
+    💡 **Tip:** Export your configuration after setup!
     
-    **Billing File (Excel):**
-    - Must contain columns for AWB number and charged weight
-    - Common column names: `AWB`, `AWB Number`, `Charged Weight`, `Weight`
+    ### Step 2: Upload Required Files
     
-    **Order File (Excel/CSV):**
-    - Must contain columns for AWB, Item Name, and Quantity
-    - Common column names: `AWB`, `Item`, `Item Name`, `Quantity`, `Qty`
-    - Can have multiple items per AWB
+    **1. Billing File (Excel):** 
+    - Must have "Freight" sheet
+    - Contains AWB NUMBER, Weight, Courier Parent, freight charges
+    
+    **2. Order File (CSV):**
+    - Contains SKU ID, SKU Title, Awb No, Quantity, Courier, State, city
     
     ### Step 3: Run Validation
     
-    Click the **"Validate Billing"** button to:
-    - Calculate total weight per AWB (using higher of dead/volumetric weight)
-    - Compare calculated weight with charged weight
-    - Flag discrepancies where charged weight < calculated weight
-    - Identify missing AWBs (present in billing but not in orders)
+    The system will:
+    - ✅ Calculate total weight per AWB (max of dead/volumetric)
+    - ✅ Determine shipping zone (Local, Within State, Metro to Metro, Rest of India, Special Zone)
+    - ✅ Calculate expected freight from rate card
+    - ✅ Compare charged vs expected amounts
+    - ✅ Flag discrepancies
     
     ### Step 4: Review Results
     
-    The results will show:
-    - ✅ **OK**: Charged weight is appropriate
-    - ❌ **Error**: Calculated weight exceeds charged weight (billing issue)
-    - ⚠️ **Missing**: AWB not found in order file
+    **Status Types:**
+    - 🟢 **OK**: All checks passed
+    - 🔴 **Error**: Weight mismatch or overcharging detected
+    - 🟡 **Warning**: Courier not specified or items not configured
+    - 🟣 **Missing**: AWB not found in order file
     
-    ### Step 5: Export
+    **Key Columns:**
+    - **Weight Status**: Compares calculated vs charged weight
+    - **Billing Status**: Indicates overcharging, undercharging, or missing courier
+    - **Expected Freight**: Calculated from rate card
+    - **Freight Difference**: Charged - Expected (positive = overcharged)
     
-    Download results as Excel or CSV for further analysis.
+    ### 📊 Rate Card Information
     
-    ---
+    The application uses the Prozo rate card for:
+    - Bluedart Surface & Air
+    - Delhivery Surface & Air
+    - (Extensible to other couriers)
     
-    ### 💡 Tips
+    **Zone Determination:**
+    - **Local**: Same city (e.g., Mumbai to Mumbai)
+    - **Within State**: Same state (e.g., Bhiwandi to Pune)
+    - **Metro to Metro**: Between Delhi NCR, Mumbai, Chennai, Kolkata, Bangalore
+    - **Rest of India**: Inter-region (excluding special zones)
+    - **Special Zone**: J&K, HP, Kerala, NE states, Andaman, Lakshadweep
     
-    - **Save your settings**: Use Export Settings to save item configurations
-    - **Reuse settings**: Import previously saved configurations
-    - **Exact matching**: Ensure item names in settings match exactly with order file
-    - **Multiple items**: System automatically sums weights for multi-item orders
+    ### 🔧 Common Issues
     
-    ---
+    **"Courier not specified"**
+    - AWB has no courier in billing file
+    - System checks order file as fallback
+    - Flag indicates validation cannot proceed
     
-    ### ⚖️ Billing Logic
+    **"Items not configured"**
+    - SKU ID or Title not in weight settings
+    - Add missing items in sidebar
+    - Export updated configuration
     
-    For each AWB:
-    1. Calculate total dead weight = Σ (item dead weight × quantity)
-    2. Calculate total volumetric weight = Σ (item volumetric weight × quantity)
-    3. Billable weight = MAX(dead weight, volumetric weight)
-    4. If billable weight > charged weight → Flag as error
-    5. If billable weight ≤ charged weight → OK
+    **"Cannot calculate freight"**
+    - Courier not in rate card
+    - Zone not found for courier
+    - Add custom rate card support if needed
+    
+    ### 💡 Best Practices
+    
+    1. **Configure all SKUs** before running validation
+    2. **Export settings regularly** to avoid data loss
+    3. **Review warnings** - they indicate missing data
+    4. **Check overcharges** - focus on freight difference column
+    5. **Validate zone assignment** - ensure origin/destination logic is correct
     """)
 
 # Footer
 st.markdown("---")
 st.markdown(
-    '<p style="text-align: center; color: #94a3b8; font-size: 0.875rem;">Built with Streamlit • Powered by Python</p>',
+    '<p style="text-align: center; color: #94a3b8; font-size: 0.875rem;">Mama Nourish Billing Validator • Built with Streamlit</p>',
     unsafe_allow_html=True
 )
