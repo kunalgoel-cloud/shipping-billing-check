@@ -282,27 +282,56 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # Add new item
-    st.markdown("#### Add New Item")
-    with st.form("add_item_form"):
-        item_name = st.text_input("Item Name (e.g., SKU ID or Title)")
-        col1, col2 = st.columns(2)
-        with col1:
-            dead_weight = st.number_input("Dead Weight (kg)", min_value=0.0, step=0.01, format="%.3f")
-        with col2:
-            volumetric_weight = st.number_input("Volumetric Weight (kg)", min_value=0.0, step=0.01, format="%.3f")
-        
-        if st.form_submit_button("➕ Add Item", use_container_width=True):
-            if item_name:
-                st.session_state.item_weights[item_name] = {
-                    'dead_weight': dead_weight,
-                    'volumetric_weight': volumetric_weight
-                }
-                save_item_weights(st.session_state.item_weights)
-                st.success(f"✓ Added {item_name}")
-                st.rerun()
-            else:
-                st.error("Please enter an item name")
+    # Toggle between B2C and B2B configuration
+    config_mode = st.radio("Configuration Mode", ["B2C (Unit Weight)", "B2B (Case Pack)"], horizontal=True)
+    
+    if config_mode == "B2C (Unit Weight)":
+        st.markdown("#### Add B2C Item (Unit-based)")
+        with st.form("add_b2c_item_form"):
+            item_name = st.text_input("Item Name (e.g., SKU ID or Title)")
+            col1, col2 = st.columns(2)
+            with col1:
+                dead_weight = st.number_input("Dead Weight per unit (kg)", min_value=0.0, step=0.01, format="%.3f")
+            with col2:
+                volumetric_weight = st.number_input("Volumetric Weight per unit (kg)", min_value=0.0, step=0.01, format="%.3f")
+            
+            if st.form_submit_button("➕ Add B2C Item", use_container_width=True):
+                if item_name:
+                    st.session_state.item_weights[item_name] = {
+                        'dead_weight': dead_weight,
+                        'volumetric_weight': volumetric_weight,
+                        'type': 'B2C'
+                    }
+                    save_item_weights(st.session_state.item_weights)
+                    st.success(f"✓ Added {item_name} (B2C)")
+                    st.rerun()
+                else:
+                    st.error("Please enter an item name")
+    
+    else:  # B2B Case Pack mode
+        st.markdown("#### Add B2B Item (Case Pack)")
+        with st.form("add_b2b_item_form"):
+            item_name = st.text_input("Item Name (e.g., Master Carton SKU)")
+            col1, col2 = st.columns(2)
+            with col1:
+                case_pack_qty = st.number_input("Units per Case", min_value=1, step=1, value=75)
+            with col2:
+                case_weight = st.number_input("Chargeable Weight per Case (kg)", min_value=0.0, step=0.1, value=15.0, format="%.2f")
+            
+            st.info(f"📦 Each case contains {case_pack_qty} units and weighs {case_weight} kg")
+            
+            if st.form_submit_button("➕ Add B2B Item", use_container_width=True):
+                if item_name:
+                    st.session_state.item_weights[item_name] = {
+                        'case_pack_qty': case_pack_qty,
+                        'case_weight': case_weight,
+                        'type': 'B2B'
+                    }
+                    save_item_weights(st.session_state.item_weights)
+                    st.success(f"✓ Added {item_name} (B2B Case Pack)")
+                    st.rerun()
+                else:
+                    st.error("Please enter an item name")
     
     st.markdown("---")
     
@@ -313,17 +342,41 @@ with st.sidebar:
         # Search/filter
         search_term = st.text_input("🔍 Search items", "")
         
-        filtered_items = {k: v for k, v in st.session_state.item_weights.items() 
-                         if search_term.lower() in k.lower()}
+        # Filter by type
+        filter_type = st.selectbox("Filter by Type", ["All", "B2C Only", "B2B Only"])
+        
+        filtered_items = {}
+        for k, v in st.session_state.item_weights.items():
+            if search_term.lower() in k.lower():
+                item_type = v.get('type', 'B2C')  # Default to B2C for backward compatibility
+                if filter_type == "All":
+                    filtered_items[k] = v
+                elif filter_type == "B2C Only" and item_type == 'B2C':
+                    filtered_items[k] = v
+                elif filter_type == "B2B Only" and item_type == 'B2B':
+                    filtered_items[k] = v
         
         for item, weights in filtered_items.items():
-            with st.expander(f"📦 {item[:30]}..."):
-                st.write(f"**Dead Weight:** {weights['dead_weight']} kg")
-                st.write(f"**Volumetric Weight:** {weights['volumetric_weight']} kg")
-                if st.button(f"🗑️ Delete", key=f"del_{item}"):
-                    del st.session_state.item_weights[item]
-                    save_item_weights(st.session_state.item_weights)
-                    st.rerun()
+            item_type = weights.get('type', 'B2C')
+            
+            if item_type == 'B2C':
+                with st.expander(f"📦 {item[:30]}... (B2C)"):
+                    st.write(f"**Type:** B2C (Unit Weight)")
+                    st.write(f"**Dead Weight:** {weights.get('dead_weight', 0)} kg")
+                    st.write(f"**Volumetric Weight:** {weights.get('volumetric_weight', 0)} kg")
+                    if st.button(f"🗑️ Delete", key=f"del_{item}"):
+                        del st.session_state.item_weights[item]
+                        save_item_weights(st.session_state.item_weights)
+                        st.rerun()
+            else:  # B2B
+                with st.expander(f"📦 {item[:30]}... (B2B Case Pack)"):
+                    st.write(f"**Type:** B2B (Case Pack)")
+                    st.write(f"**Units per Case:** {weights.get('case_pack_qty', 0)}")
+                    st.write(f"**Weight per Case:** {weights.get('case_weight', 0)} kg")
+                    if st.button(f"🗑️ Delete", key=f"del_{item}"):
+                        del st.session_state.item_weights[item]
+                        save_item_weights(st.session_state.item_weights)
+                        st.rerun()
     else:
         st.info("No items configured yet. Add items above.")
     
@@ -496,9 +549,14 @@ with tab1:
                                         item_name = sku_title
                                     
                                     if item_weights:
-                                        total_dead_weight += item_weights['dead_weight'] * quantity
-                                        total_vol_weight += item_weights['volumetric_weight'] * quantity
-                                        items_list.append(f"{item_name[:20]} (x{quantity})")
+                                        # Check if this is a B2C item (has dead_weight/volumetric_weight)
+                                        if 'dead_weight' in item_weights and 'volumetric_weight' in item_weights:
+                                            total_dead_weight += item_weights['dead_weight'] * quantity
+                                            total_vol_weight += item_weights['volumetric_weight'] * quantity
+                                            items_list.append(f"{item_name[:20]} (x{quantity})")
+                                        else:
+                                            # This is a B2B case pack item, skip for B2C
+                                            items_not_configured.append(f"{sku_id or sku_title} (x{quantity}) [B2B Item]")
                                     else:
                                         items_not_configured.append(f"{sku_id or sku_title} (x{quantity})")
                                 
@@ -758,9 +816,9 @@ with tab2:
                                     'Status': 'Missing'
                                 })
                             else:
-                                # Calculate total weight
-                                total_dead_weight = 0
-                                total_vol_weight = 0
+                                # Calculate total weight using case pack logic for B2B
+                                total_cases = 0
+                                total_weight_from_cases = 0
                                 items_list = []
                                 items_not_configured = []
                                 
@@ -773,26 +831,41 @@ with tab2:
                                     except:
                                         quantity = 1
                                     
-                                    # Try to find weight config
-                                    item_weights = None
+                                    # Try to find case pack config
+                                    item_config = None
                                     item_name = None
                                     
                                     if sku_id in st.session_state.item_weights:
-                                        item_weights = st.session_state.item_weights[sku_id]
+                                        item_config = st.session_state.item_weights[sku_id]
                                         item_name = sku_id
                                     elif sku_title in st.session_state.item_weights:
-                                        item_weights = st.session_state.item_weights[sku_title]
+                                        item_config = st.session_state.item_weights[sku_title]
                                         item_name = sku_title
                                     
-                                    if item_weights:
-                                        total_dead_weight += item_weights['dead_weight'] * quantity
-                                        total_vol_weight += item_weights['volumetric_weight'] * quantity
-                                        items_list.append(f"{item_name[:30]} (x{quantity})")
+                                    if item_config:
+                                        # Check if this is a B2B case pack item
+                                        if 'case_pack_qty' in item_config and 'case_weight' in item_config:
+                                            case_pack_qty = item_config['case_pack_qty']
+                                            case_weight = item_config['case_weight']
+                                            
+                                            # Calculate number of cases
+                                            # Round up to nearest case if partial case exists
+                                            import math
+                                            num_cases = math.ceil(quantity / case_pack_qty)
+                                            case_weight_total = num_cases * case_weight
+                                            
+                                            total_cases += num_cases
+                                            total_weight_from_cases += case_weight_total
+                                            
+                                            items_list.append(f"{item_name[:30]} ({quantity} units = {num_cases} cases)")
+                                        else:
+                                            # This is a B2C unit item, skip for B2B
+                                            items_not_configured.append(f"{sku_id or sku_title} (x{quantity}) [B2C Item]")
                                     else:
                                         items_not_configured.append(f"{sku_id or sku_title} (x{quantity})")
                                 
-                                # Billable weight
-                                billable_weight = max(total_dead_weight, total_vol_weight)
+                                # Billable weight for B2B is total weight from cases
+                                billable_weight = total_weight_from_cases
                                 
                                 # Expected chargeable weight (minimum 15 kg for B2B)
                                 expected_chargeable_weight = max(billable_weight, MIN_CHARGEABLE_WEIGHT)
@@ -855,7 +928,8 @@ with tab2:
                                     'Courier': courier,
                                     'Zone': applied_zone,
                                     'Item Details': ', '.join(items_list) if items_list else 'Not configured',
-                                    'Quantity': len(order_items),
+                                    'Total Units': sum([order_row.get('Quantity', 0) for _, order_row in order_items.iterrows()]),
+                                    'Total Cases': total_cases,
                                     'Billable Weight (kg)': round(billable_weight, 2),
                                     'Expected Chargeable Weight (kg)': round(expected_chargeable_weight, 2),
                                     'Charged Weight (kg)': charged_weight,
