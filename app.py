@@ -248,6 +248,24 @@ st.markdown("""
         transform: translateY(-2px);
         box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
     }
+    
+    /* Dataframe text wrapping */
+    .stDataFrame {
+        font-size: 0.875rem;
+    }
+    
+    .stDataFrame [data-testid="stDataFrameResizable"] div[data-testid="stDataFrameResizableCell"] {
+        white-space: normal !important;
+        word-wrap: break-word !important;
+        overflow-wrap: break-word !important;
+        line-height: 1.5 !important;
+        padding: 8px !important;
+    }
+    
+    /* Make dataframe scrollable horizontally if needed */
+    .stDataFrame {
+        overflow-x: auto !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -1058,6 +1076,15 @@ with tab3:
         # Display results
         st.markdown(f"### 📋 Detailed Results ({len(filtered_df)} records)")
         
+        # Configure column widths
+        column_config = {}
+        if 'Item Details' in filtered_df.columns:
+            column_config['Item Details'] = st.column_config.TextColumn(
+                "Item Details",
+                width="large",
+                help="Item names and quantities"
+            )
+        
         # Style the dataframe
         def highlight_status(row):
             if row['Status'] == 'Error':
@@ -1071,7 +1098,7 @@ with tab3:
             return [''] * len(row)
         
         styled_df = filtered_df.style.apply(highlight_status, axis=1)
-        st.dataframe(styled_df, use_container_width=True, height=400)
+        st.dataframe(styled_df, use_container_width=True, height=400, column_config=column_config)
         
         # Download options
         st.markdown("### 📥 Export Results")
