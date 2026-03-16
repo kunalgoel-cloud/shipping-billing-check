@@ -81,31 +81,109 @@ def save_item_weights(weights):
     except Exception as e:
         st.sidebar.error(f"Error saving item weights: {str(e)}")
 
-def determine_zone(origin_city, dest_city, dest_state):
+def determine_zone(origin_city, dest_city, dest_state, origin_state=None):
     """Determine shipping zone based on origin and destination"""
     origin_city = str(origin_city).strip().title() if pd.notna(origin_city) else ""
     dest_city = str(dest_city).strip().title() if pd.notna(dest_city) else ""
     dest_state = str(dest_state).strip().upper() if pd.notna(dest_state) else ""
+    origin_state = str(origin_state).strip().upper() if pd.notna(origin_state) and origin_state else "MAHARASHTRA"
     
-    # Check for special zones
-    for sz in SPECIAL_ZONES:
-        if sz.upper() in dest_state or sz.upper() in dest_city:
+    # Normalize state names
+    state_mapping = {
+        'MH': 'MAHARASHTRA', 'MAHARASHTRA': 'MAHARASHTRA',
+        'DL': 'DELHI', 'DELHI': 'DELHI',
+        'KA': 'KARNATAKA', 'KARNATAKA': 'KARNATAKA',
+        'TN': 'TAMIL NADU', 'TAMILNADU': 'TAMIL NADU', 'TAMIL NADU': 'TAMIL NADU',
+        'WB': 'WEST BENGAL', 'WEST BENGAL': 'WEST BENGAL',
+        'GJ': 'GUJARAT', 'GUJARAT': 'GUJARAT',
+        'UP': 'UTTAR PRADESH', 'UTTAR PRADESH': 'UTTAR PRADESH',
+        'RJ': 'RAJASTHAN', 'RAJASTHAN': 'RAJASTHAN',
+        'HR': 'HARYANA', 'HARYANA': 'HARYANA',
+        'PB': 'PUNJAB', 'PUNJAB': 'PUNJAB',
+        'AP': 'ANDHRA PRADESH', 'ANDHRA PRADESH': 'ANDHRA PRADESH',
+        'TG': 'TELANGANA', 'TELANGANA': 'TELANGANA',
+        'KL': 'KERALA', 'KERALA': 'KERALA',
+        'OR': 'ODISHA', 'ODISHA': 'ODISHA',
+        'BR': 'BIHAR', 'BIHAR': 'BIHAR',
+        'JH': 'JHARKHAND', 'JHARKHAND': 'JHARKHAND',
+        'CG': 'CHHATTISGARH', 'CHHATTISGARH': 'CHHATTISGARH',
+        'MP': 'MADHYA PRADESH', 'MADHYA PRADESH': 'MADHYA PRADESH',
+        'AS': 'ASSAM', 'ASSAM': 'ASSAM',
+        'HP': 'HIMACHAL PRADESH', 'HIMACHAL PRADESH': 'HIMACHAL PRADESH',
+        'J&K': 'JAMMU AND KASHMIR', 'JAMMU AND KASHMIR': 'JAMMU AND KASHMIR',
+        'JK': 'JAMMU AND KASHMIR',
+        'UT': 'UTTARAKHAND', 'UTTARAKHAND': 'UTTARAKHAND'
+    }
+    
+    # Normalize origin and destination states
+    for code, full_name in state_mapping.items():
+        if code in origin_state:
+            origin_state = full_name
+            break
+    
+    for code, full_name in state_mapping.items():
+        if code in dest_state:
+            dest_state = full_name
+            break
+    
+    # Check for special zones first
+    special_zone_states = [
+        'JAMMU AND KASHMIR', 'HIMACHAL PRADESH', 'KERALA',
+        'ANDAMAN', 'LAKSHADWEEP', 'ARUNACHAL PRADESH', 
+        'ASSAM', 'MANIPUR', 'MEGHALAYA', 'MIZORAM', 
+        'NAGALAND', 'TRIPURA', 'SIKKIM'
+    ]
+    
+    special_zone_keywords = ['ANDAMAN', 'LAKSHADWEEP', 'LEH', 'LADAKH']
+    
+    for sz_state in special_zone_states:
+        if sz_state in dest_state:
             return 'Special Zone'
     
-    # Check if same city (Local)
-    if origin_city and dest_city and origin_city.lower() == dest_city.lower():
-        return 'Local'
+    for keyword in special_zone_keywords:
+        if keyword in dest_state.upper() or keyword in dest_city.upper():
+            return 'Special Zone'
     
-    # Check if metro to metro
-    origin_is_metro = any(metro.lower() in origin_city.lower() for metro in METRO_CITIES)
-    dest_is_metro = any(metro.lower() in dest_city.lower() for metro in METRO_CITIES)
+    # Check if Local (same city or nearby areas in same metro)
+    # Local zones are typically within same city/nearby suburbs
+    local_city_groups = {
+        'MUMBAI': ['MUMBAI', 'NAVI MUMBAI', 'THANE', 'BHIWANDI', 'KALYAN', 'DOMBIVLI', 'VASAI', 'VIRAR'],
+        'DELHI': ['DELHI', 'NEW DELHI', 'GURGAON', 'GURUGRAM', 'NOIDA', 'GREATER NOIDA', 'FARIDABAD', 'GHAZIABAD'],
+        'BANGALORE': ['BANGALORE', 'BENGALURU', 'BANGALORE URBAN'],
+        'CHENNAI': ['CHENNAI'],
+        'KOLKATA': ['KOLKATA', 'HOWRAH'],
+        'PUNE': ['PUNE', 'PIMPRI', 'CHINCHWAD'],
+        'HYDERABAD': ['HYDERABAD', 'SECUNDERABAD']
+    }
+    
+    for metro, cities in local_city_groups.items():
+        origin_in_metro = any(city in origin_city.upper() for city in cities)
+        dest_in_metro = any(city in dest_city.upper() for city in cities)
+        if origin_in_metro and dest_in_metro:
+            return 'Local'
+    
+    # Check if metro to metro (different metros)
+    metro_cities_list = ['MUMBAI', 'NAVI MUMBAI', 'DELHI', 'NEW DELHI', 'BANGALORE', 
+                         'BENGALURU', 'CHENNAI', 'KOLKATA', 'HYDERABAD', 'PUNE']
+    
+    origin_is_metro = any(metro.upper() in origin_city.upper() for metro in metro_cities_list)
+    dest_is_metro = any(metro.upper() in dest_city.upper() for metro in metro_cities_list)
     
     if origin_is_metro and dest_is_metro:
-        return 'Metro to Metro'
+        # Check if same metro (should be Local, not Metro to Metro)
+        same_metro = False
+        for metro, cities in local_city_groups.items():
+            origin_in_metro = any(city in origin_city.upper() for city in cities)
+            dest_in_metro = any(city in dest_city.upper() for city in cities)
+            if origin_in_metro and dest_in_metro:
+                same_metro = True
+                break
+        
+        if not same_metro:
+            return 'Metro to Metro'
     
-    # Within state (simplified - would need state mapping for origin)
-    # For Bhiwandi (Maharashtra), check if destination is also Maharashtra
-    if 'MH' in dest_state or 'MAHARASHTRA' in dest_state:
+    # Check if within same state
+    if origin_state == dest_state:
         return 'Within State'
     
     # Default to Rest of India
@@ -606,7 +684,8 @@ with tab1:
                                     slab_max_kg = (slab_number * 500) / 1000
                                 
                                 # Determine zone
-                                zone = determine_zone(origin_city, dest_city, dest_state)
+                                origin_state = 'Maharashtra'  # Default origin (Bhiwandi)
+                                zone = determine_zone(origin_city, dest_city, dest_state, origin_state)
                                 
                                 # Calculate expected freight
                                 expected_freight = None
@@ -1189,7 +1268,7 @@ with tab3:
                 st.error("Please enter a valid weight")
             else:
                 # Determine zone
-                zone = determine_zone(origin_city_calc, dest_city_calc, dest_state_calc)
+                zone = determine_zone(origin_city_calc, dest_city_calc, dest_state_calc, origin_state_calc)
                 
                 # Calculate freight
                 freight_cost, calc_note = calculate_freight_cost(total_weight_kg, zone, courier_calc)
