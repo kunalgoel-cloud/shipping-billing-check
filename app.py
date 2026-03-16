@@ -1064,14 +1064,100 @@ with tab3:
             st.markdown("**Package Weight**")
             
             weight_input_mode = st.radio("Weight Input Method", 
-                                        ["Enter Total Weight", "Calculate from Items"], 
+                                        ["Select from Item Master", "Enter Total Weight", "Manual Item Entry"], 
                                         key="weight_mode")
             
-            if weight_input_mode == "Enter Total Weight":
+            if weight_input_mode == "Select from Item Master":
+                st.markdown("**Select Items from Configured Inventory**")
+                
+                if not st.session_state.item_weights:
+                    st.warning("⚠️ No items configured yet. Please add items in the sidebar first.")
+                    total_weight_kg = 0
+                else:
+                    # Filter only B2C items
+                    b2c_items = {k: v for k, v in st.session_state.item_weights.items() 
+                                if v.get('type', 'B2C') == 'B2C' and 'dead_weight' in v}
+                    
+                    if not b2c_items:
+                        st.warning("⚠️ No B2C items found. Please add B2C items in the sidebar.")
+                        total_weight_kg = 0
+                    else:
+                        # Allow multiple item selection
+                        st.markdown(f"**Available Items:** {len(b2c_items)}")
+                        
+                        # Initialize selected items in session state
+                        if 'calc_selected_items' not in st.session_state:
+                            st.session_state.calc_selected_items = []
+                        
+                        # Item selection
+                        selected_item = st.selectbox(
+                            "Choose an item to add",
+                            [""] + list(b2c_items.keys()),
+                            key="item_selector"
+                        )
+                        
+                        col_qty, col_add = st.columns([3, 1])
+                        with col_qty:
+                            item_quantity = st.number_input("Quantity", min_value=1, value=1, key="item_qty_input")
+                        with col_add:
+                            st.write("")  # Spacing
+                            if st.button("➕ Add", key="add_item_btn"):
+                                if selected_item:
+                                    st.session_state.calc_selected_items.append({
+                                        'name': selected_item,
+                                        'quantity': item_quantity,
+                                        'dead_weight': b2c_items[selected_item]['dead_weight'],
+                                        'vol_weight': b2c_items[selected_item]['volumetric_weight']
+                                    })
+                                    st.rerun()
+                        
+                        # Display selected items
+                        if st.session_state.calc_selected_items:
+                            st.markdown("**Items in Cart:**")
+                            
+                            total_dead_weight = 0
+                            total_vol_weight = 0
+                            
+                            for idx, item in enumerate(st.session_state.calc_selected_items):
+                                item_dead = item['dead_weight'] * item['quantity']
+                                item_vol = item['vol_weight'] * item['quantity']
+                                
+                                total_dead_weight += item_dead
+                                total_vol_weight += item_vol
+                                
+                                col_item, col_remove = st.columns([5, 1])
+                                with col_item:
+                                    st.text(f"{item['name'][:40]} (x{item['quantity']}) - {max(item_dead, item_vol):.3f} kg")
+                                with col_remove:
+                                    if st.button("🗑️", key=f"remove_{idx}"):
+                                        st.session_state.calc_selected_items.pop(idx)
+                                        st.rerun()
+                            
+                            total_weight_kg = max(total_dead_weight, total_vol_weight)
+                            
+                            st.success(f"**Total Items:** {len(st.session_state.calc_selected_items)} | **Total Weight:** {total_weight_kg:.3f} kg")
+                            st.caption(f"Dead: {total_dead_weight:.3f} kg | Volumetric: {total_vol_weight:.3f} kg")
+                            
+                            if st.button("🗑️ Clear All Items", key="clear_all_items"):
+                                st.session_state.calc_selected_items = []
+                                st.rerun()
+                        else:
+                            st.info("No items added yet. Select an item and click 'Add'.")
+                            total_weight_kg = 0
+            
+            elif weight_input_mode == "Enter Total Weight":
+                # Clear selected items if switching modes
+                if 'calc_selected_items' in st.session_state:
+                    st.session_state.calc_selected_items = []
+                
                 total_weight_kg = st.number_input("Total Weight (kg)", min_value=0.0, step=0.1, 
                                                  format="%.3f", key="calc_total_weight")
-            else:
-                st.markdown("**Add Items**")
+            else:  # Manual Item Entry
+                # Clear selected items if switching modes
+                if 'calc_selected_items' in st.session_state:
+                    st.session_state.calc_selected_items = []
+                
+                st.markdown("**Add Items Manually**")
                 num_items = st.number_input("Number of different items", min_value=1, max_value=10, value=1, key="num_items")
                 
                 total_dead_weight = 0
@@ -1210,8 +1296,129 @@ with tab3:
         
         with col2:
             st.markdown("**Package Weight**")
-            b2b_weight = st.number_input("Total Weight (kg)", min_value=0.0, step=1.0, value=15.0, 
-                                        format="%.2f", key="b2b_weight")
+            
+            b2b_weight_mode = st.radio("Weight Input Method", 
+                                      ["Select from Item Master", "Enter Total Weight"], 
+                                      key="b2b_weight_mode")
+            
+            if b2b_weight_mode == "Select from Item Master":
+                st.markdown("**Select Items from Configured Inventory**")
+                
+                if not st.session_state.item_weights:
+                    st.warning("⚠️ No items configured yet. Please add items in the sidebar first.")
+                    b2b_weight = 0
+                else:
+                    # Get all items (both B2C and B2B)
+                    all_items = st.session_state.item_weights
+                    
+                    # Initialize selected items for B2B
+                    if 'calc_b2b_selected_items' not in st.session_state:
+                        st.session_state.calc_b2b_selected_items = []
+                    
+                    # Item selection
+                    selected_b2b_item = st.selectbox(
+                        "Choose an item to add",
+                        [""] + list(all_items.keys()),
+                        key="b2b_item_selector"
+                    )
+                    
+                    col_qty_b2b, col_add_b2b = st.columns([3, 1])
+                    with col_qty_b2b:
+                        b2b_item_quantity = st.number_input("Quantity", min_value=1, value=1, key="b2b_item_qty_input")
+                    with col_add_b2b:
+                        st.write("")  # Spacing
+                        if st.button("➕ Add", key="add_b2b_item_btn"):
+                            if selected_b2b_item:
+                                item_config = all_items[selected_b2b_item]
+                                st.session_state.calc_b2b_selected_items.append({
+                                    'name': selected_b2b_item,
+                                    'quantity': b2b_item_quantity,
+                                    'config': item_config
+                                })
+                                st.rerun()
+                    
+                    # Display selected items and calculate weight
+                    if st.session_state.calc_b2b_selected_items:
+                        st.markdown("**Items in Cart:**")
+                        
+                        total_case_weight = 0
+                        total_loose_weight = 0
+                        total_cases = 0
+                        
+                        LOOSE_CASE_4KG = 4.0
+                        LOOSE_CASE_8KG = 8.0
+                        
+                        for idx, item in enumerate(st.session_state.calc_b2b_selected_items):
+                            config = item['config']
+                            qty = item['quantity']
+                            
+                            # Check if B2B case pack or B2C unit
+                            if 'case_pack_qty' in config and 'case_weight' in config:
+                                # B2B Case Pack
+                                import math
+                                num_cases = math.ceil(qty / config['case_pack_qty'])
+                                weight = num_cases * config['case_weight']
+                                total_case_weight += weight
+                                total_cases += num_cases
+                                
+                                col_item, col_remove = st.columns([5, 1])
+                                with col_item:
+                                    st.text(f"📦 {item['name'][:35]} (x{qty}) = {num_cases} cases @ {weight:.2f} kg")
+                                with col_remove:
+                                    if st.button("🗑️", key=f"remove_b2b_{idx}"):
+                                        st.session_state.calc_b2b_selected_items.pop(idx)
+                                        st.rerun()
+                            
+                            elif 'dead_weight' in config and 'volumetric_weight' in config:
+                                # B2C Unit - accumulate for loose case
+                                vol_weight = config['volumetric_weight'] * qty
+                                total_loose_weight += vol_weight
+                                
+                                col_item, col_remove = st.columns([5, 1])
+                                with col_item:
+                                    st.text(f"📄 {item['name'][:35]} (x{qty}) - {vol_weight:.3f} kg vol")
+                                with col_remove:
+                                    if st.button("🗑️", key=f"remove_b2b_{idx}"):
+                                        st.session_state.calc_b2b_selected_items.pop(idx)
+                                        st.rerun()
+                        
+                        # Calculate loose case weight
+                        loose_case_weight = 0
+                        loose_case_count = 0
+                        if total_loose_weight > 0:
+                            import math
+                            if total_loose_weight <= LOOSE_CASE_4KG:
+                                loose_case_count = 1
+                                loose_case_weight = LOOSE_CASE_4KG
+                            elif total_loose_weight <= LOOSE_CASE_8KG:
+                                loose_case_count = 1
+                                loose_case_weight = LOOSE_CASE_8KG
+                            else:
+                                loose_case_count = math.ceil(total_loose_weight / LOOSE_CASE_8KG)
+                                loose_case_weight = loose_case_count * LOOSE_CASE_8KG
+                            
+                            st.info(f"🎁 Loose units packed in: {loose_case_count} × {loose_case_weight/loose_case_count:.0f}kg case(s)")
+                            total_cases += loose_case_count
+                        
+                        b2b_weight = total_case_weight + loose_case_weight
+                        
+                        st.success(f"**Total Items:** {len(st.session_state.calc_b2b_selected_items)} | **Total Cases:** {total_cases} | **Total Weight:** {b2b_weight:.2f} kg")
+                        st.caption(f"Master Cartons: {total_case_weight:.2f} kg | Loose Cases: {loose_case_weight:.2f} kg")
+                        
+                        if st.button("🗑️ Clear All Items", key="clear_all_b2b_items"):
+                            st.session_state.calc_b2b_selected_items = []
+                            st.rerun()
+                    else:
+                        st.info("No items added yet. Select an item and click 'Add'.")
+                        b2b_weight = 0
+            
+            else:  # Enter Total Weight
+                # Clear selected items if switching modes
+                if 'calc_b2b_selected_items' in st.session_state:
+                    st.session_state.calc_b2b_selected_items = []
+                
+                b2b_weight = st.number_input("Total Weight (kg)", min_value=0.0, step=1.0, value=15.0, 
+                                            format="%.2f", key="b2b_weight")
             
             st.info(f"Minimum chargeable weight: {MIN_CHARGEABLE_WEIGHT} kg")
         
