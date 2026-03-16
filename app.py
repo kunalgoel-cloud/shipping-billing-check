@@ -427,7 +427,7 @@ with st.sidebar:
             st.error(f"Error importing settings: {str(e)}")
 
 # Main content
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["📋 B2C Validation", "🏢 B2B Validation", "📊 Results", "📄 Rate Card", "ℹ️ Instructions"])
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📋 B2C Validation", "🏢 B2B Validation", "💰 Rate Calculator", "📊 Results", "📄 Rate Card", "ℹ️ Instructions"])
 
 with tab1:
     st.markdown("### B2C Billing Validation")
@@ -1037,6 +1037,246 @@ with tab2:
                         st.code(traceback.format_exc())
 
 with tab3:
+    st.markdown("### 💰 Shipping Rate Calculator")
+    st.info("Calculate shipping costs for B2C and B2B shipments based on weight and destination")
+    
+    # Calculator mode selection
+    calc_mode = st.radio("Select Mode", ["B2C Shipping", "B2B Shipping"], horizontal=True, key="calc_mode")
+    
+    if calc_mode == "B2C Shipping":
+        st.markdown("#### B2C Shipping Rate Calculator")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("**Shipment Details**")
+            courier_calc = st.selectbox("Select Courier", 
+                                        ["Bluedart Surface", "Bluedart Air", "Delhivery Surface", "Delhivery Air"],
+                                        key="calc_courier")
+            
+            origin_city_calc = st.text_input("Origin City", value="Bhiwandi", key="calc_origin")
+            origin_state_calc = st.text_input("Origin State", value="Maharashtra", key="calc_origin_state")
+            
+            dest_city_calc = st.text_input("Destination City", key="calc_dest_city")
+            dest_state_calc = st.text_input("Destination State", key="calc_dest_state")
+        
+        with col2:
+            st.markdown("**Package Weight**")
+            
+            weight_input_mode = st.radio("Weight Input Method", 
+                                        ["Enter Total Weight", "Calculate from Items"], 
+                                        key="weight_mode")
+            
+            if weight_input_mode == "Enter Total Weight":
+                total_weight_kg = st.number_input("Total Weight (kg)", min_value=0.0, step=0.1, 
+                                                 format="%.3f", key="calc_total_weight")
+            else:
+                st.markdown("**Add Items**")
+                num_items = st.number_input("Number of different items", min_value=1, max_value=10, value=1, key="num_items")
+                
+                total_dead_weight = 0
+                total_vol_weight = 0
+                
+                for i in range(num_items):
+                    with st.expander(f"Item {i+1}", expanded=(i==0)):
+                        item_col1, item_col2 = st.columns(2)
+                        with item_col1:
+                            qty = st.number_input(f"Quantity", min_value=1, value=1, key=f"qty_{i}")
+                            dead_wt = st.number_input(f"Dead Weight per unit (kg)", min_value=0.0, step=0.01, 
+                                                     format="%.3f", key=f"dead_{i}")
+                        with item_col2:
+                            vol_wt = st.number_input(f"Volumetric Weight per unit (kg)", min_value=0.0, step=0.01, 
+                                                    format="%.3f", key=f"vol_{i}")
+                        
+                        total_dead_weight += dead_wt * qty
+                        total_vol_weight += vol_wt * qty
+                
+                total_weight_kg = max(total_dead_weight, total_vol_weight)
+                
+                st.info(f"**Calculated Weight:** {total_weight_kg:.3f} kg (Dead: {total_dead_weight:.3f} kg, Vol: {total_vol_weight:.3f} kg)")
+        
+        # Calculate button
+        if st.button("Calculate B2C Shipping Cost", type="primary", use_container_width=True, key="calc_b2c"):
+            if not dest_city_calc or not dest_state_calc:
+                st.error("Please enter destination city and state")
+            elif total_weight_kg <= 0:
+                st.error("Please enter a valid weight")
+            else:
+                # Determine zone
+                zone = determine_zone(origin_city_calc, dest_city_calc, dest_state_calc)
+                
+                # Calculate freight
+                freight_cost, calc_note = calculate_freight_cost(total_weight_kg, zone, courier_calc)
+                
+                # Calculate expected chargeable weight (500g slab)
+                weight_grams = total_weight_kg * 1000
+                if weight_grams <= 500:
+                    expected_chargeable_kg = 0.5
+                else:
+                    import math
+                    slabs_needed = math.ceil((weight_grams - 1) / 500) + 1
+                    expected_chargeable_kg = (slabs_needed * 500) / 1000
+                
+                # Display results
+                st.success("✅ Calculation Complete!")
+                
+                result_col1, result_col2, result_col3 = st.columns(3)
+                
+                with result_col1:
+                    st.metric("Zone", zone)
+                    st.metric("Courier", courier_calc)
+                
+                with result_col2:
+                    st.metric("Billable Weight", f"{total_weight_kg:.3f} kg")
+                    st.metric("Chargeable Weight", f"{expected_chargeable_kg:.3f} kg")
+                
+                with result_col3:
+                    st.metric("Shipping Cost", f"₹{freight_cost:.2f}")
+                    if calc_note:
+                        st.caption(calc_note)
+                
+                # Show breakdown
+                with st.expander("💡 Calculation Breakdown"):
+                    st.markdown(f"""
+                    **Route:** {origin_city_calc}, {origin_state_calc} → {dest_city_calc}, {dest_state_calc}
+                    
+                    **Zone Classification:** {zone}
+                    
+                    **Weight Calculation:**
+                    - Billable Weight: {total_weight_kg:.3f} kg
+                    - Expected Chargeable Weight Slab: {expected_chargeable_kg:.3f} kg (500g slabs)
+                    
+                    **Rate Applied:** {courier_calc} - {zone}
+                    
+                    **Calculation Note:** {calc_note if calc_note else 'Standard rate applied'}
+                    
+                    **Final Shipping Cost:** ₹{freight_cost:.2f}
+                    """)
+    
+    else:  # B2B Shipping
+        st.markdown("#### B2B Shipping Rate Calculator (Safexpress)")
+        
+        # Safexpress rate card
+        SAFEXPRESS_RATES = {
+            'N1': {'N1': 6.48, 'N2': 6.48, 'E': 10.8, 'NE': 16.2, 'W1': 7.56, 'W2': 8.64, 'S1': 8.64, 'S2': 10.8, 'C': 7.56},
+            'N2': {'N1': 6.48, 'N2': 6.48, 'E': 10.8, 'NE': 16.2, 'W1': 8.64, 'W2': 8.64, 'S1': 10.8, 'S2': 10.8, 'C': 7.56},
+            'E': {'N1': 8.64, 'N2': 10.8, 'E': 6.48, 'NE': 7.56, 'W1': 8.64, 'W2': 10.8, 'S1': 8.64, 'S2': 10.8, 'C': 7.56},
+            'NE': {'N1': 8.64, 'N2': 10.8, 'E': 7.56, 'NE': 6.48, 'W1': 10.8, 'W2': 10.8, 'S1': 10.8, 'S2': 16.2, 'C': 8.64},
+            'W1': {'N1': 7.56, 'N2': 8.64, 'E': 10.8, 'NE': 16.2, 'W1': 6.48, 'W2': 6.48, 'S1': 8.64, 'S2': 10.8, 'C': 7.56},
+            'W2': {'N1': 8.64, 'N2': 10.8, 'E': 10.8, 'NE': 16.2, 'W1': 6.48, 'W2': 6.48, 'S1': 7.56, 'S2': 10.8, 'C': 7.56},
+            'S1': {'N1': 8.64, 'N2': 10.8, 'E': 10.8, 'NE': 16.2, 'W1': 8.64, 'W2': 7.56, 'S1': 6.48, 'S2': 7.56, 'C': 7.56},
+            'S2': {'N1': 10.8, 'N2': 10.8, 'E': 10.8, 'NE': 16.2, 'W1': 8.64, 'W2': 8.64, 'S1': 6.48, 'S2': 6.48, 'C': 7.56},
+            'C': {'N1': 7.56, 'N2': 8.64, 'E': 10.8, 'NE': 16.2, 'W1': 6.48, 'W2': 7.56, 'S1': 7.56, 'S2': 10.8, 'C': 6.48}
+        }
+        
+        METRO_CITIES_B2B = ['AHMEDABAD', 'BENGALURU', 'CHENNAI', 'DELHI', 'HYDERABAD', 'KOLKATA', 'MUMBAI', 'PUNE']
+        MIN_CHARGEABLE_WEIGHT = 15  # kg
+        MIN_FREIGHT = 400  # Rs
+        FSC_PERCENT = 20  # 20%
+        DOCKET_CHARGE = 100  # Rs
+        FOV_CHARGE = 100  # Rs
+        METRO_CHARGE = 100  # Rs
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("**Origin & Destination**")
+            pickup_zone = st.selectbox("Pickup Zone", 
+                                      ["N1 (Delhi, UP, Haryana, Rajasthan)",
+                                       "N2 (Punjab, Chandigarh, HP, Uttarakhand, J&K)",
+                                       "E (West Bengal, Odisha, Bihar, Jharkhand, Chhattisgarh)",
+                                       "NE (Assam, Meghalaya, Tripura, etc.)",
+                                       "W1 (Gujarat, Daman & Diu)",
+                                       "W2 (Maharashtra, Goa)",
+                                       "S1 (AP, Telangana, Karnataka, TN)",
+                                       "S2 (Kerala)",
+                                       "C (Madhya Pradesh)"],
+                                      key="b2b_pickup_zone")
+            
+            drop_zone = st.selectbox("Drop Zone", 
+                                    ["N1 (Delhi, UP, Haryana, Rajasthan)",
+                                     "N2 (Punjab, Chandigarh, HP, Uttarakhand, J&K)",
+                                     "E (West Bengal, Odisha, Bihar, Jharkhand, Chhattisgarh)",
+                                     "NE (Assam, Meghalaya, Tripura, etc.)",
+                                     "W1 (Gujarat, Daman & Diu)",
+                                     "W2 (Maharashtra, Goa)",
+                                     "S1 (AP, Telangana, Karnataka, TN)",
+                                     "S2 (Kerala)",
+                                     "C (Madhya Pradesh)"],
+                                    key="b2b_drop_zone")
+            
+            pickup_city = st.text_input("Pickup City (for metro check)", value="Mumbai", key="b2b_pickup_city")
+            drop_city = st.text_input("Drop City (for metro check)", value="", key="b2b_drop_city")
+        
+        with col2:
+            st.markdown("**Package Weight**")
+            b2b_weight = st.number_input("Total Weight (kg)", min_value=0.0, step=1.0, value=15.0, 
+                                        format="%.2f", key="b2b_weight")
+            
+            st.info(f"Minimum chargeable weight: {MIN_CHARGEABLE_WEIGHT} kg")
+        
+        # Calculate button
+        if st.button("Calculate B2B Shipping Cost", type="primary", use_container_width=True, key="calc_b2b_btn"):
+            # Extract zone codes
+            pickup_zone_code = pickup_zone.split()[0]
+            drop_zone_code = drop_zone.split()[0]
+            
+            # Calculate chargeable weight
+            chargeable_weight = max(b2b_weight, MIN_CHARGEABLE_WEIGHT)
+            
+            # Get rate
+            rate_per_kg = SAFEXPRESS_RATES[pickup_zone_code][drop_zone_code]
+            
+            # Calculate charges
+            base_freight = chargeable_weight * rate_per_kg
+            freight = max(base_freight, MIN_FREIGHT)
+            fsc = freight * (FSC_PERCENT / 100)
+            
+            # Check metro
+            is_metro = any(metro in pickup_city.upper() or metro in drop_city.upper() 
+                          for metro in METRO_CITIES_B2B)
+            metro_charge = METRO_CHARGE if is_metro else 0
+            
+            total_cost = freight + fsc + DOCKET_CHARGE + FOV_CHARGE + metro_charge
+            
+            # Display results
+            st.success("✅ Calculation Complete!")
+            
+            result_col1, result_col2, result_col3 = st.columns(3)
+            
+            with result_col1:
+                st.metric("Zone", f"{pickup_zone_code} → {drop_zone_code}")
+                st.metric("Rate per KG", f"₹{rate_per_kg}")
+            
+            with result_col2:
+                st.metric("Actual Weight", f"{b2b_weight:.2f} kg")
+                st.metric("Chargeable Weight", f"{chargeable_weight:.2f} kg")
+            
+            with result_col3:
+                st.metric("Total Shipping Cost", f"₹{total_cost:.2f}")
+                st.caption("Includes all charges")
+            
+            # Show breakdown
+            with st.expander("💡 Cost Breakdown"):
+                st.markdown(f"""
+                **Route:** {pickup_zone_code} ({pickup_city}) → {drop_zone_code} ({drop_city})
+                
+                **Weight:**
+                - Actual Weight: {b2b_weight:.2f} kg
+                - Minimum Weight: {MIN_CHARGEABLE_WEIGHT} kg
+                - Chargeable Weight: {chargeable_weight:.2f} kg
+                
+                **Charges Breakdown:**
+                - Base Freight: ₹{freight:.2f} ({chargeable_weight:.2f} kg × ₹{rate_per_kg}/kg)
+                - Fuel Surcharge (20%): ₹{fsc:.2f}
+                - Docket Charges: ₹{DOCKET_CHARGE:.2f}
+                - FOV Charges: ₹{FOV_CHARGE:.2f}
+                - Metro Charges: ₹{metro_charge:.2f} {"(Applied)" if is_metro else "(Not applicable)"}
+                
+                **Total Cost:** ₹{total_cost:.2f}
+                """)
+
+with tab4:
     if st.session_state.validation_results is not None:
         results_df = st.session_state.validation_results
         validation_type = st.session_state.validation_type or 'Unknown'
@@ -1190,7 +1430,7 @@ with tab3:
     else:
         st.info("👆 Upload files and run validation to see results here")
 
-with tab4:
+with tab5:
     st.markdown("### 📄 Rate Card Management")
     
     st.info("**Current Status:** Rate card is hardcoded from the Prozo commercials PDF in the system")
@@ -1272,14 +1512,15 @@ with tab4:
         use_container_width=True
     )
 
-with tab5:
+with tab6:
     st.markdown("""
     ### 📖 How to Use This Application
     
     This application validates billing for **Mama Nourish** shipments with:
-    1. **B2C Validation** - Weight slab and rate card validation (Active)
-    2. **B2B Validation** - Separate validation rules (Coming Soon)
-    3. **Rate Card Management** - View and upload commercials
+    1. **B2C Validation** - Weight slab and rate card validation
+    2. **B2B Validation** - Zone-based Safexpress validation with case packs
+    3. **Rate Calculator** - Calculate shipping costs for new shipments
+    4. **Rate Card Management** - View and upload commercials
     4. **Persistent Storage** - Item configurations saved permanently
     
     ---
