@@ -669,7 +669,8 @@ with tab1:
                                     expected_chargeable_weight_kg = 0.5
                                 else:
                                     # Round up to nearest 500g
-                                    slabs_needed = int((billable_weight_grams - 1) / 500) + 1
+                                    import math
+                                    slabs_needed = math.ceil(billable_weight_grams / 500)
                                     expected_chargeable_weight_kg = (slabs_needed * 500) / 1000
                                 
                                 # Determine which 500g slab the billable weight falls into
@@ -1279,7 +1280,7 @@ with tab3:
                     expected_chargeable_kg = 0.5
                 else:
                     import math
-                    slabs_needed = math.ceil((weight_grams - 1) / 500) + 1
+                    slabs_needed = math.ceil(weight_grams / 500)
                     expected_chargeable_kg = (slabs_needed * 500) / 1000
                 
                 # Display results
