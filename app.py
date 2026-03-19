@@ -14,9 +14,28 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# File paths for persistent storage
-ITEM_WEIGHTS_FILE = "item_weights_persistent.json"
-RATE_CARD_FILE = "rate_card_data.json"
+# File paths for persistent storage - using absolute paths in user's home or app directory
+import platform
+
+def get_data_directory():
+    """Get or create a persistent data directory"""
+    if platform.system() == "Windows":
+        data_dir = os.path.join(os.environ.get('APPDATA', os.path.expanduser('~')), 'MamaNourishValidator')
+    else:
+        # For Linux/Mac or Streamlit Cloud
+        data_dir = os.path.join(os.path.expanduser('~'), '.mama_nourish_validator')
+    
+    # Create directory if it doesn't exist
+    os.makedirs(data_dir, exist_ok=True)
+    return data_dir
+
+DATA_DIR = get_data_directory()
+ITEM_WEIGHTS_FILE = os.path.join(DATA_DIR, "item_weights_persistent.json")
+RATE_CARD_FILE = os.path.join(DATA_DIR, "rate_card_data.json")
+BACKUP_DIR = os.path.join(DATA_DIR, "backups")
+
+# Create backup directory
+os.makedirs(BACKUP_DIR, exist_ok=True)
 
 # Metro cities definition
 METRO_CITIES = ['Delhi', 'Mumbai', 'Bangalore', 'Kolkata', 'Chennai', 
@@ -64,10 +83,18 @@ RATE_CARD = {
 
 # Load item weights from file if exists
 def load_item_weights():
+    """Load item weights from persistent storage with monitoring"""
     if os.path.exists(ITEM_WEIGHTS_FILE):
         try:
             with open(ITEM_WEIGHTS_FILE, 'r') as f:
-                return json.load(f)
+                data = json.load(f)
+                
+                # Check file size and warn if getting large
+                file_size = os.path.getsize(ITEM_WEIGHTS_FILE)
+                if file_size > 1_000_000:  # 1MB
+                    st.sidebar.warning(f"⚠️ Item database is {file_size/1_000_000:.1f}MB. Consider backing up.")
+                
+                return data
         except Exception as e:
             st.sidebar.error(f"Error loading saved item weights: {str(e)}")
             return {}
@@ -75,11 +102,70 @@ def load_item_weights():
 
 # Save item weights to file
 def save_item_weights(weights):
+    """Save item weights with automatic backup"""
     try:
+        # Create a backup before saving if file exists
+        if os.path.exists(ITEM_WEIGHTS_FILE):
+            timestamp = pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')
+            backup_file = os.path.join(BACKUP_DIR, f"item_weights_backup_{timestamp}.json")
+            
+            # Keep only last 10 backups to save space
+            existing_backups = sorted([f for f in os.listdir(BACKUP_DIR) if f.startswith('item_weights_backup_')])
+            if len(existing_backups) >= 10:
+                # Remove oldest backups
+                for old_backup in existing_backups[:-9]:
+                    try:
+                        os.remove(os.path.join(BACKUP_DIR, old_backup))
+                    except:
+                        pass
+            
+            # Create new backup
+            try:
+                with open(ITEM_WEIGHTS_FILE, 'r') as f:
+                    with open(backup_file, 'w') as bf:
+                        bf.write(f.read())
+            except:
+                pass  # Backup failed but continue with save
+        
+        # Save the new data
         with open(ITEM_WEIGHTS_FILE, 'w') as f:
             json.dump(weights, f, indent=2)
+        
+        return True
     except Exception as e:
         st.sidebar.error(f"Error saving item weights: {str(e)}")
+        return False
+
+def get_storage_info():
+    """Get information about storage usage"""
+    info = {
+        'item_weights_size': 0,
+        'item_count': 0,
+        'backup_count': 0,
+        'total_size': 0,
+        'data_dir': DATA_DIR
+    }
+    
+    try:
+        if os.path.exists(ITEM_WEIGHTS_FILE):
+            info['item_weights_size'] = os.path.getsize(ITEM_WEIGHTS_FILE)
+            with open(ITEM_WEIGHTS_FILE, 'r') as f:
+                data = json.load(f)
+                info['item_count'] = len(data)
+        
+        if os.path.exists(BACKUP_DIR):
+            backups = [f for f in os.listdir(BACKUP_DIR) if f.endswith('.json')]
+            info['backup_count'] = len(backups)
+            for backup in backups:
+                backup_path = os.path.join(BACKUP_DIR, backup)
+                if os.path.exists(backup_path):
+                    info['total_size'] += os.path.getsize(backup_path)
+        
+        info['total_size'] += info['item_weights_size']
+    except Exception as e:
+        pass  # Silently fail, not critical
+    
+    return info
 
 def determine_zone(origin_city, dest_city, dest_state, origin_state=None):
     """Determine shipping zone based on origin and destination"""
@@ -349,7 +435,15 @@ st.markdown("""
 
 # Initialize session state
 if 'item_weights' not in st.session_state:
-    st.session_state.item_weights = load_item_weights()
+    loaded_weights = load_item_weights()
+    st.session_state.item_weights = loaded_weights
+    
+    # Show notification about loaded data
+    if loaded_weights:
+        st.sidebar.success(f"✅ Loaded {len(loaded_weights)} items from storage")
+    else:
+        st.sidebar.info("ℹ️ No saved items found. Add items below to get started.")
+
 if 'validation_results' not in st.session_state:
     st.session_state.validation_results = None
 if 'validation_type' not in st.session_state:
@@ -363,18 +457,45 @@ st.markdown('<p class="subtitle">Automated billing verification with rate card v
 with st.sidebar:
     st.markdown("### ⚙️ Item Weight Configuration")
     
-    # Info box about persistent storage
-    with st.expander("ℹ️ About Persistent Storage"):
+    # Info box about persistent storage with storage stats
+    with st.expander("💾 Storage & Backup Info", expanded=False):
+        storage_info = get_storage_info()
+        
         st.markdown("""
-        **Your item configurations are saved permanently!**
+        **Your data is saved permanently!**
         
-        - All items are auto-saved to `item_weights_persistent.json`
-        - Data persists across app restarts
-        - No need to reconfigure items each time
-        - Export/Import for backup or sharing
-        
-        **File Location:** Same directory as the app
+        ✅ All items auto-saved with automatic backup  
+        ✅ Data persists across app restarts  
+        ✅ Last 10 backups kept automatically  
         """)
+        
+        st.markdown("---")
+        st.markdown("**Current Storage:**")
+        st.metric("Items Configured", storage_info['item_count'])
+        st.metric("Database Size", f"{storage_info['item_weights_size']/1024:.1f} KB")
+        st.metric("Backup Files", storage_info['backup_count'])
+        st.metric("Total Storage", f"{storage_info['total_size']/1024:.1f} KB")
+        
+        st.caption(f"📁 Location: `{storage_info['data_dir']}`")
+        
+        # Warning if storage is getting large
+        if storage_info['total_size'] > 5_000_000:  # 5MB
+            st.warning("⚠️ Storage exceeding 5MB. Consider exporting and cleaning old data.")
+        
+        # Backup management
+        st.markdown("---")
+        if st.button("🗑️ Clear Old Backups", help="Keep only the latest backup", key="clear_backups"):
+            try:
+                backups = sorted([f for f in os.listdir(BACKUP_DIR) if f.startswith('item_weights_backup_')])
+                if len(backups) > 1:
+                    for old_backup in backups[:-1]:
+                        os.remove(os.path.join(BACKUP_DIR, old_backup))
+                    st.success(f"✓ Removed {len(backups)-1} old backups")
+                    st.rerun()
+                else:
+                    st.info("No old backups to remove")
+            except Exception as e:
+                st.error(f"Error: {e}")
     
     st.markdown("---")
     
@@ -481,26 +602,64 @@ with st.sidebar:
     # Import/Export settings
     st.markdown("#### Import/Export Settings")
     
-    # Export settings
+    # Export current settings
     if st.session_state.item_weights:
         settings_json = json.dumps(st.session_state.item_weights, indent=2)
         st.download_button(
-            label="📥 Export Settings",
+            label="📥 Export Current Settings",
             data=settings_json,
-            file_name="item_weights_config.json",
+            file_name=f"item_weights_{pd.Timestamp.now().strftime('%Y%m%d')}.json",
             mime="application/json",
             use_container_width=True
         )
     
-    # Import settings
-    uploaded_settings = st.file_uploader("📤 Import Settings", type=['json'], key="settings_upload")
+    # Restore from automatic backup
+    if os.path.exists(BACKUP_DIR):
+        backups = sorted([f for f in os.listdir(BACKUP_DIR) if f.startswith('item_weights_backup_')], reverse=True)
+        if backups:
+            st.markdown("**🔄 Restore from Backup**")
+            selected_backup = st.selectbox(
+                "Select backup to restore",
+                backups,
+                format_func=lambda x: x.replace('item_weights_backup_', '').replace('.json', '').replace('_', ' '),
+                key="backup_selector"
+            )
+            
+            if st.button("♻️ Restore This Backup", key="restore_backup", use_container_width=True):
+                try:
+                    backup_path = os.path.join(BACKUP_DIR, selected_backup)
+                    with open(backup_path, 'r') as f:
+                        restored_data = json.load(f)
+                    st.session_state.item_weights = restored_data
+                    save_item_weights(restored_data)
+                    st.success(f"✓ Restored {len(restored_data)} items from backup")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error restoring backup: {e}")
+    
+    # Import from file
+    st.markdown("**📤 Import from File**")
+    uploaded_settings = st.file_uploader("Upload JSON file", type=['json'], key="settings_upload")
     if uploaded_settings:
         try:
             imported_settings = json.loads(uploaded_settings.read())
-            st.session_state.item_weights.update(imported_settings)
-            save_item_weights(st.session_state.item_weights)
-            st.success("✓ Settings imported successfully")
-            st.rerun()
+            
+            # Show what will be imported
+            st.info(f"📦 Found {len(imported_settings)} items in uploaded file")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("Replace All", key="import_replace", use_container_width=True):
+                    st.session_state.item_weights = imported_settings
+                    save_item_weights(st.session_state.item_weights)
+                    st.success("✓ Replaced all settings")
+                    st.rerun()
+            with col2:
+                if st.button("Merge (Keep Existing)", key="import_merge", use_container_width=True):
+                    st.session_state.item_weights.update(imported_settings)
+                    save_item_weights(st.session_state.item_weights)
+                    st.success("✓ Merged settings")
+                    st.rerun()
         except Exception as e:
             st.error(f"Error importing settings: {str(e)}")
 
